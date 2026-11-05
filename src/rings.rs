@@ -22,6 +22,14 @@ const END_RADIUS: f32 = 1.1;
 const RING_WIDTH: f32 = 0.2;
 /// Vueltas por segundo del ciclo de nacer y apagarse.
 const EXPANSION_SPEED: f32 = 0.055;
+/// Anillos delgados que llegan más lejos. Se suman a los gruesos.
+const THIN_RING_COUNT: usize = 5;
+/// Radio con el que terminan de apagarse los delgados.
+const THIN_END_RADIUS: f32 = 1.45;
+/// Ancho de los delgados.
+const THIN_RING_WIDTH: f32 = 0.03;
+/// Velocidad de los delgados: al recorrer más distancia van un poco más lento.
+const THIN_EXPANSION_SPEED: f32 = 0.04;
 /// Brillo general: 0 apaga los anillos.
 const RING_BRIGHTNESS: f32 = 2.3;
 /// Brillo de los anillos que pasan por delante del disco, para que no se vean
@@ -36,6 +44,9 @@ struct Ring {
     tangent: Vector3,
     bitangent: Vector3,
     phase: f32,
+    end_radius: f32,
+    width: f32,
+    speed: f32,
 }
 
 /// Estado de un anillo en este cuadro.
@@ -43,6 +54,7 @@ struct ActiveRing<'a> {
     ring: &'a Ring,
     /// Radio del borde exterior.
     radius: f32,
+    width: f32,
     /// Se apaga al final de su expansión.
     fade: f32,
 }
@@ -52,34 +64,17 @@ pub struct Rings {
 }
 
 impl Rings {
-    /// Reparte las normales sobre una esfera (espiral de Fibonacci), para que
-    /// los anillos rodeen al sol en todas las direcciones.
     pub fn new() -> Self {
-        let golden_angle = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
-
-        let rings = (0..RING_COUNT)
-            .map(|index| {
-                let i = index as f32;
-                let y = 1.0 - (i + 0.5) * 2.0 / RING_COUNT as f32;
-                let r = (1.0 - y * y).sqrt();
-                let angle = i * golden_angle;
-                let normal = color(r * angle.cos(), y, r * angle.sin());
-
-                let helper = if normal.y.abs() < 0.9 {
-                    color(0.0, 1.0, 0.0)
-                } else {
-                    color(1.0, 0.0, 0.0)
-                };
-                let tangent = normal.cross(helper).normalize();
-
-                Ring {
-                    normal,
-                    tangent,
-                    bitangent: normal.cross(tangent),
-                    phase: cell_random((index as i32, 3, 9), 0),
-                }
-            })
-            .collect();
+        let mut rings = ring_family(RING_COUNT, 0, 0.0, END_RADIUS, RING_WIDTH, EXPANSION_SPEED);
+        // Se giran las direcciones para que no coincidan con las de los gruesos.
+        rings.extend(ring_family(
+            THIN_RING_COUNT,
+            100,
+            1.3,
+            THIN_END_RADIUS,
+            THIN_RING_WIDTH,
+            THIN_EXPANSION_SPEED,
+        ));
 
         Rings { rings }
     }
@@ -110,9 +105,49 @@ impl Rings {
     }
 }
 
+/// Crea un grupo de anillos iguales. Reparte sus normales sobre una esfera
+/// (espiral de Fibonacci), para que rodeen al sol en todas las direcciones.
+fn ring_family(
+    count: usize,
+    seed: i32,
+    rotation: f32,
+    end_radius: f32,
+    width: f32,
+    speed: f32,
+) -> Vec<Ring> {
+    let golden_angle = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
+
+    (0..count)
+        .map(|index| {
+            let i = index as f32;
+            let y = 1.0 - (i + 0.5) * 2.0 / count as f32;
+            let r = (1.0 - y * y).sqrt();
+            let angle = i * golden_angle + rotation;
+            let normal = color(r * angle.cos(), y, r * angle.sin());
+
+            let helper = if normal.y.abs() < 0.9 {
+                color(0.0, 1.0, 0.0)
+            } else {
+                color(1.0, 0.0, 0.0)
+            };
+            let tangent = normal.cross(helper).normalize();
+
+            Ring {
+                normal,
+                tangent,
+                bitangent: normal.cross(tangent),
+                phase: cell_random((seed + index as i32, 3, 9), 0),
+                end_radius,
+                width,
+                speed,
+            }
+        })
+        .collect()
+}
+
 /// Avance del anillo en su ciclo. Solo está activo mientras se ve.
 fn activate(ring: &Ring, time: f32) -> Option<ActiveRing<'_>> {
-    let age = (time * EXPANSION_SPEED + ring.phase).fract();
+    let age = (time * ring.speed + ring.phase).fract();
     let fade = (1.0 - smoothstep(0.7, 1.0, age)) * smoothstep(0.0, 0.08, age);
     if fade <= 0.0 {
         return None;
@@ -120,7 +155,8 @@ fn activate(ring: &Ring, time: f32) -> Option<ActiveRing<'_>> {
 
     Some(ActiveRing {
         ring,
-        radius: mix_scalar(START_RADIUS, END_RADIUS, age),
+        radius: mix_scalar(START_RADIUS, ring.end_radius, age),
+        width: ring.width,
         fade,
     })
 }
@@ -147,7 +183,8 @@ fn rays_light(
     // Si el rayo pasa lejos de todos los anillos no hace falta revisarlos.
     let along = -(origin.x * direction.x + origin.y * direction.y + origin.z * direction.z);
     let origin_sqr = origin.x * origin.x + origin.y * origin.y + origin.z * origin.z;
-    if origin_sqr - along * along > END_RADIUS * END_RADIUS {
+    let reach = END_RADIUS.max(THIN_END_RADIUS);
+    if origin_sqr - along * along > reach * reach {
         return Vector3::zero();
     }
 
@@ -195,7 +232,7 @@ fn ring_light(
     let distance = (hit.0 * hit.0 + hit.1 * hit.1 + hit.2 * hit.2).sqrt();
 
     // 0 en el borde interior del anillo y 1 en el exterior.
-    let across = (distance - (active.radius - RING_WIDTH)) / RING_WIDTH;
+    let across = (distance - (active.radius - active.width)) / active.width;
     if !(0.0..=1.0).contains(&across) {
         return None;
     }
@@ -235,13 +272,16 @@ mod tests {
             tangent: color(1.0, 0.0, 0.0),
             bitangent: color(0.0, 0.0, 1.0),
             phase: 0.0,
+            end_radius: END_RADIUS,
+            width: RING_WIDTH,
+            speed: EXPANSION_SPEED,
         }
     }
 
     #[test]
     fn ray_only_lights_up_at_the_ring_radius() {
         let ring = flat_ring();
-        let active = ActiveRing { ring: &ring, radius: 1.5, fade: 1.0 };
+        let active = ActiveRing { ring: &ring, radius: 1.5, width: RING_WIDTH, fade: 1.0 };
         let origin = color(0.0, 2.0, 0.0);
         let towards = |x: f32| (color(x, 0.0, 0.0) - origin).normalize();
 
@@ -254,7 +294,7 @@ mod tests {
     #[test]
     fn the_sun_hides_rings_behind_it() {
         let ring = flat_ring();
-        let active = ActiveRing { ring: &ring, radius: 1.5, fade: 1.0 };
+        let active = ActiveRing { ring: &ring, radius: 1.5, width: RING_WIDTH, fade: 1.0 };
         let origin = color(0.0, 3.0, -1.5);
         let direction = (color(0.0, 0.0, 1.5 - RING_WIDTH * 0.16) - origin).normalize();
 
@@ -265,10 +305,19 @@ mod tests {
     #[test]
     fn normals_are_spread_in_all_directions() {
         let rings = Rings::new();
-        assert_eq!(rings.rings.len(), RING_COUNT);
+        assert_eq!(rings.rings.len(), RING_COUNT + THIN_RING_COUNT);
         for axis in [color(1.0, 0.0, 0.0), color(0.0, 1.0, 0.0), color(0.0, 0.0, 1.0)] {
             assert!(rings.rings.iter().any(|ring| ring.normal.dot(axis).abs() > 0.8));
         }
+    }
+
+    #[test]
+    fn thin_rings_are_thinner_and_reach_further() {
+        let rings = Rings::new();
+        let (thick, thin) = rings.rings.split_at(RING_COUNT);
+        assert_eq!(thin.len(), THIN_RING_COUNT);
+        assert!(thin[0].width < thick[0].width);
+        assert!(thin[0].end_radius > thick[0].end_radius);
     }
 
     #[test]
