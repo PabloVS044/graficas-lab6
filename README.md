@@ -1,8 +1,9 @@
 # Lab 6: Planetas y estrellas con shaders
 
 Tres cuerpos celestes de un sistema solar de fantasía, dibujados con un software
-renderer en CPU. Los tres usan la misma `sphere.obj`, sin modificar sus vértices y
-sin texturas: toda la apariencia sale de fragment shaders procedurales.
+renderer en CPU, más la luna de la jungla. Todos usan la misma `sphere.obj`, sin
+modificar sus vértices y sin texturas: toda la apariencia sale de fragment shaders
+procedurales.
 
 | Jungla (rocoso) | Mundo tóxico (gaseoso) | Sol rojo (estrella) |
 |---|---|---|
@@ -146,6 +147,34 @@ gruesos y cercanos, y 5 delgados que llegan más lejos.
 | `RING_COUNT` | `rings.rs` | 7 | Cantidad de anillos gruesos |
 | `THIN_RING_COUNT` | `rings.rs` | 5 | Cantidad de anillos delgados |
 | `RING_BRIGHTNESS` | `rings.rs` | 2.3 | Brillo de todos los anillos |
+
+### Luna de la jungla
+
+Una luna gris de roca con mares oscuros y cráteres, que orbita alrededor de la jungla.
+
+Archivos: `src/shaders/moon.rs` y `moon_model` en `src/main.rs`.
+
+No agrega ningún modelo: es la misma `sphere.obj`, dibujada una segunda vez con otra matriz
+que la escala y la traslada. El búfer de profundidad decide si pasa por delante del planeta
+o queda oculta detrás. Siempre le muestra la misma cara a la jungla.
+
+**Patrones y cómo se combinan**
+
+1. `fbm` da el tono de la roca, y un ruido de baja frecuencia oscurece los mares.
+2. Los cráteres (`craters`) se reparten en una cuadrícula con posición y tamaño al azar.
+   Oscurecen el fondo y aclaran el borde. Hay dos escalas superpuestas.
+3. Recibe la misma luz que el planeta.
+
+**Parámetros principales**
+
+| Constante | Archivo | Valor | Qué cambia |
+|---|---|---:|---|
+| `MOON_SCALE` | `main.rs` | 0.14 | Tamaño de la luna |
+| `MOON_ORBIT_RADIUS` | `main.rs` | 1.15 | Distancia a la jungla |
+| `MOON_ORBIT_SPEED` | `main.rs` | 0.25 | Velocidad de la órbita |
+| `MOON_ORBIT_TILT` | `main.rs` | 0.35 | Inclinación de la órbita |
+| `LARGE_CRATER_GRID` | `moon.rs` | 4 | Más alto da cráteres grandes más pequeños y numerosos |
+| `CRATER_CHANCE` | `moon.rs` | 0.55 | Fracción de celdas con cráter |
 
 ## Efectos implementados
 
