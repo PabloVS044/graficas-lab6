@@ -12,13 +12,15 @@ use framebuffer::Framebuffer;
 use obj::Obj;
 use rayon::prelude::*;
 use raylib::prelude::*;
+use shaders::Body;
 use vertex::Vertex;
 
 const WIDTH: usize = 800;
 const HEIGHT: usize = 600;
 const MODEL_PATH: &str = "sphere.obj";
-const FIELD_OF_VIEW: f64 = 45.0;
+const FIELD_OF_VIEW: f32 = 45.0;
 const BACKGROUND: Vector3 = Vector3 { x: 0.02, y: 0.02, z: 0.05 };
+const CAPTURES_PATH: &str = "docs";
 
 /// Valores que no cambian entre los vértices y fragmentos de un mismo cuadro.
 pub struct Uniforms {
@@ -27,20 +29,24 @@ pub struct Uniforms {
     pub projection: Matrix,
     pub width: usize,
     pub height: usize,
+    #[allow(dead_code)] // Lo usarán los reflejos y el parallax.
     pub camera_position: Vector3,
     /// Dirección normalizada que va del planeta hacia la luz.
     pub light_direction: Vector3,
     #[allow(dead_code)] // Lo usarán los shaders animados.
     pub time: f32,
+    pub body: Body,
 }
 
 impl Uniforms {
-    fn new(camera: &OrbitCamera, time: f32) -> Self {
+    fn new(camera: &OrbitCamera, time: f32, body: Body) -> Self {
+        let field_of_view = FIELD_OF_VIEW.to_radians();
+
         Uniforms {
             model: Matrix::identity(),
             view: camera.view_matrix(),
             projection: Matrix::perspective(
-                FIELD_OF_VIEW.to_radians(),
+                field_of_view as f64,
                 WIDTH as f64 / HEIGHT as f64,
                 0.1,
                 100.0,
@@ -50,6 +56,7 @@ impl Uniforms {
             camera_position: camera.position(),
             light_direction: Vector3::new(0.6, 0.5, 0.7).normalize(),
             time,
+            body,
         }
     }
 }
@@ -95,9 +102,14 @@ fn main() {
     let vertices = model.vertex_array();
 
     let args: Vec<String> = std::env::args().collect();
-    if let Some(flag) = args.iter().position(|arg| arg == "--export-image") {
-        let path = args.get(flag + 1).expect("Uso: --export-image <archivo.png>");
-        export_image(&vertices, path);
+    let has_flag = |flag: &str| args.iter().any(|arg| arg == flag);
+
+    if has_flag("--export-images") {
+        export_images(&vertices);
+        return;
+    }
+    if has_flag("--benchmark") {
+        benchmark(&vertices);
         return;
     }
 
@@ -111,28 +123,64 @@ fn main() {
     framebuffer.init_texture(&mut window, &thread);
 
     let mut camera = OrbitCamera::new();
+    let mut body = Body::Jungle;
 
     while !window.window_should_close() {
+        if window.is_key_pressed(KeyboardKey::KEY_ONE) {
+            body = Body::Jungle;
+        }
+        if window.is_key_pressed(KeyboardKey::KEY_TWO) {
+            body = Body::Toxic;
+        }
+        if window.is_key_pressed(KeyboardKey::KEY_THREE) {
+            body = Body::RedSun;
+        }
         camera.update(&window, window.get_frame_time());
 
-        let uniforms = Uniforms::new(&camera, window.get_time() as f32);
+        let uniforms = Uniforms::new(&camera, window.get_time() as f32, body);
         render(&mut framebuffer, &vertices, &uniforms);
         framebuffer.upload();
 
         let mut drawing = window.begin_drawing(&thread);
         framebuffer.draw(&mut drawing);
         drawing.draw_fps(10, 10);
-        drawing.draw_text("Flechas: orbitar   Rueda: zoom   Inicio: reiniciar", 10, 575, 16, Color::LIGHTGRAY);
+        drawing.draw_text(body.title(), 10, 34, 20, Color::RAYWHITE);
+        drawing.draw_text(
+            "1/2/3: cuerpo   Flechas: orbitar   Rueda: zoom   Inicio: reiniciar",
+            10,
+            575,
+            16,
+            Color::LIGHTGRAY,
+        );
     }
 }
 
-/// Guarda un cuadro como PNG, sin abrir la ventana.
-fn export_image(vertices: &[Vertex], path: &str) {
-    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, BACKGROUND);
-    let uniforms = Uniforms::new(&OrbitCamera::new(), 0.0);
+/// Guarda una captura de cada cuerpo en `docs/`, sin abrir la ventana.
+fn export_images(vertices: &[Vertex]) {
+    std::fs::create_dir_all(CAPTURES_PATH).expect("No se pudo crear la carpeta de capturas");
 
-    render(&mut framebuffer, vertices, &uniforms);
-    framebuffer.export(path);
+    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, BACKGROUND);
+    for body in Body::ALL {
+        let uniforms = Uniforms::new(&OrbitCamera::new(), 0.0, body);
+        render(&mut framebuffer, vertices, &uniforms);
+        framebuffer.export(&format!("{CAPTURES_PATH}/{}.png", body.file_name()));
+    }
+}
+
+/// Mide cuánto tarda un cuadro de cada cuerpo, sin abrir la ventana.
+fn benchmark(vertices: &[Vertex]) {
+    const FRAMES: u32 = 60;
+    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, BACKGROUND);
+
+    for body in Body::ALL {
+        let start = std::time::Instant::now();
+        for frame in 0..FRAMES {
+            let uniforms = Uniforms::new(&OrbitCamera::new(), frame as f32 / 60.0, body);
+            render(&mut framebuffer, vertices, &uniforms);
+        }
+        let milliseconds = start.elapsed().as_secs_f32() * 1000.0 / FRAMES as f32;
+        println!("{}: {milliseconds:.1} ms por cuadro", body.title());
+    }
 }
 
 #[cfg(test)]
@@ -152,7 +200,8 @@ mod tests {
                 pitch: (step as f32 * 0.31).sin() * 1.4,
                 distance: 2.0 + (step % 5) as f32 * 0.5,
             };
-            render(&mut framebuffer, &vertices, &Uniforms::new(&camera, 0.0));
+            let uniforms = Uniforms::new(&camera, 0.0, Body::Toxic);
+            render(&mut framebuffer, &vertices, &uniforms);
 
             for row in framebuffer.depths.chunks_exact(WIDTH) {
                 let covered = |depth: &f32| depth.is_finite();
