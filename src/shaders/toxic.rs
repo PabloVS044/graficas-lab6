@@ -1,12 +1,12 @@
 //! Mundo tóxico: gigante gaseoso de atmósfera envenenada, con bandas de verde
-//! ácido, ceniza y lodo que fluyen como un líquido. Dos ojos parpadean en medio
-//! de sendas tormentas que curvan las bandas: uno bonito en el lado iluminado y
-//! otro tenebroso en el lado oscuro, que sigue a la cámara.
+//! ácido, ceniza y lodo que fluyen como un líquido, y una tormenta que las curva.
+//! Entre el gas flotan los restos de lo que fue tierra firme, con las manzanas de
+//! una ciudad en ruinas.
 
 use noise::OpenSimplex;
 use raylib::prelude::*;
 
-use super::noise_helpers::{fbm, sample};
+use super::noise_helpers::{cell_random, fbm};
 use super::{color, mix, smoothstep};
 use crate::Uniforms;
 use crate::fragment::Fragment;
@@ -21,191 +21,77 @@ const FLOW_SPEED: f32 = 0.05;
 const STRETCH: f32 = 1.8;
 /// Cuánto oscurecen las vetas de ceniza: 0 no se ven.
 const ASH_AMOUNT: f32 = 0.35;
-/// Radio de la zona que se curva alrededor de cada ojo, en radianes sobre la esfera.
-const VORTEX_RADIUS: f32 = 0.62;
-/// Vueltas que dan las bandas junto al ojo, en radianes: 0 las deja rectas.
-const VORTEX_TWIST: f32 = 5.5;
-/// Centro del ojo bonito, en el lado iluminado.
-const DAY_EYE_CENTER: Vector3 = Vector3 { x: 0.10, y: 0.12, z: 0.99 };
-/// Centro del ojo tenebroso, en el lado oscuro.
-const NIGHT_EYE_CENTER: Vector3 = Vector3 { x: -0.55, y: -0.25, z: -0.80 };
-/// Mitad del ancho de un ojo, en radianes.
-const EYE_WIDTH: f32 = 0.27;
-/// Mitad de la altura de un ojo abierto, en radianes.
-const EYE_HEIGHT: f32 = 0.135;
-/// Radio del iris.
-const IRIS_RADIUS: f32 = 0.105;
-/// Segundos entre parpadeos del ojo bonito y lo que dura cada uno.
-const DAY_BLINK_PERIOD: f32 = 4.5;
-const DAY_BLINK_LENGTH: f32 = 0.35;
-/// Parpadeos del ojo tenebroso: lentos, y dos ritmos distintos los vuelven irregulares.
-const NIGHT_BLINK_PERIOD: f32 = 6.5;
-const NIGHT_BLINK_LENGTH: f32 = 1.0;
-const NIGHT_SECOND_BLINK_PERIOD: f32 = 11.0;
-const NIGHT_SECOND_BLINK_LENGTH: f32 = 0.5;
-/// Cuánto se mueve el iris del ojo tenebroso para seguir a la cámara.
-const NIGHT_GAZE_REACH: f32 = 0.11;
-/// Luz propia del ojo bonito: lo mantiene visible cerca del borde de la sombra.
-const DAY_EYE_GLOW: f32 = 0.10;
-/// Cuánto deforma el gas la forma del ojo: 0 lo deja como un dibujo limpio.
-const EYE_WARP: f32 = 0.26;
-/// Ancho del borde de los párpados: más alto hace que se disuelvan más en el gas.
-const EYE_EDGE_SOFTNESS: f32 = 0.04;
-/// Cuánto se transparenta la atmósfera a través del ojo: 0 lo vuelve sólido.
-const EYE_ATMOSPHERE_BLEND: f32 = 0.38;
-/// Fuerza del resplandor rojo alrededor del ojo tenebroso.
-const NIGHT_HALO: f32 = 0.14;
+/// Dirección del centro de la tormenta, desde el centro del planeta.
+const STORM_CENTER: Vector3 = Vector3 { x: -0.36, y: 0.16, z: 0.92 };
+/// Radio de la zona que se curva, en radianes sobre la esfera.
+const STORM_RADIUS: f32 = 0.62;
+/// Vueltas que dan las bandas en el centro, en radianes: 0 las deja rectas.
+const STORM_TWIST: f32 = 5.5;
+/// Tamaño de los restos de tierra: más alto da pedazos más pequeños.
+const RUIN_SCALE: f32 = 2.5;
+/// Valor del ruido desde el que hay tierra: más alto deja menos restos.
+const RUIN_THRESHOLD: f32 = 0.55;
+/// Cuánto se rompe el borde de los restos.
+const RUIN_BREAKUP: f32 = 0.22;
+/// Tamaño de las manzanas: más alto da manzanas más pequeñas y numerosas.
+const CITY_GRID: f32 = 24.0;
+/// Fuerza del brillo tóxico en la orilla de los restos: 0 lo apaga.
+const SHORE_GLOW: f32 = 0.35;
 
-/// Gira `p` alrededor de un centro. El giro es máximo junto al centro y llega a 0
+/// Gira `p` alrededor de la tormenta. El giro es máximo en el centro y llega a 0
 /// en el borde, por eso las bandas de afuera siguen rectas y se conectan sin
 /// cortes con las curvas de adentro.
 fn swirl(p: Vector3, center: Vector3) -> Vector3 {
     let distance = p.dot(center).clamp(-1.0, 1.0).acos();
-    if distance >= VORTEX_RADIUS {
+    if distance >= STORM_RADIUS {
         return p;
     }
 
-    let falloff = 1.0 - distance / VORTEX_RADIUS;
-    let (sin, cos) = (VORTEX_TWIST * falloff * falloff).sin_cos();
+    let falloff = 1.0 - distance / STORM_RADIUS;
+    let (sin, cos) = (STORM_TWIST * falloff * falloff).sin_cos();
 
     // Fórmula de Rodrigues: rotación de `p` alrededor del eje `center`.
     p * cos + center.cross(p) * sin + center * (center.dot(p) * (1.0 - cos))
 }
 
-/// Ejes de un plano tangente a la esfera en `center`: el primero es horizontal y
-/// el segundo apunta hacia arriba, para que los ojos queden derechos.
-fn eye_axes(center: Vector3) -> (Vector3, Vector3) {
-    let horizontal = color(0.0, 1.0, 0.0).cross(center).normalize();
-    (horizontal, center.cross(horizontal))
+/// Dónde hay restos de tierra. Un ruido grande decide los pedazos y uno fino rompe
+/// sus bordes. Devuelve la cobertura, de 0 a 1, y qué tan lejos está de la orilla.
+fn ruin_mask(noise: &OpenSimplex, p: Vector3) -> (f32, f32) {
+    let large = fbm(noise, p * RUIN_SCALE + color(17.0, -3.0, 8.0), 4);
+    let broken = fbm(noise, p * 15.0 + color(2.0, 30.0, -11.0), 2) - 0.5;
+    let value = large + broken * RUIN_BREAKUP;
+    (
+        smoothstep(RUIN_THRESHOLD, RUIN_THRESHOLD + 0.012, value),
+        value - RUIN_THRESHOLD,
+    )
 }
 
-/// Apertura del párpado: 1 abierto y 0 cerrado. Cierra y abre una vez por período.
-fn blink(time: f32, period: f32, length: f32) -> f32 {
-    let t = (time / period).fract() * period;
-    if t >= length {
-        return 1.0;
-    }
-    smoothstep(0.0, 1.0, (t / length * 2.0 - 1.0).abs())
-}
+/// Color de los restos: tierra quemada y, más adentro, una cuadrícula de manzanas
+/// separadas por calles. Cada manzana tiene su tono y algunas ya no existen.
+fn ruin_color(noise: &OpenSimplex, p: Vector3, depth_inland: f32) -> Vector3 {
+    let scorched = mix(
+        color(0.055, 0.045, 0.035),
+        color(0.20, 0.16, 0.11),
+        fbm(noise, p * 24.0, 2),
+    );
 
-/// Forma de un ojo en coordenadas `u`, `v` del plano tangente.
-struct EyeShape {
-    /// Parte visible del globo: 1 adentro de los párpados abiertos.
-    opening: f32,
-    /// Almendra completa, con el ojo abierto o cerrado.
-    almond: f32,
-    /// Sombra alrededor de la almendra.
-    socket: f32,
-}
+    let cell = p * CITY_GRID;
+    let (cx, cy, cz) = (cell.x.floor(), cell.y.floor(), cell.z.floor());
+    let seed = (cx as i32, cy as i32, cz as i32);
 
-fn eye_shape(u: f32, v: f32, open: f32) -> EyeShape {
-    let across = (u / EYE_WIDTH).abs();
-    let height = EYE_HEIGHT * (1.0 - across * across).max(0.0);
+    // Distancia a la calle más cercana, medida en los dos ejes más anchos de la
+    // superficie para que las calles sigan viéndose rectas.
+    let to_street = |value: f32| (value - value.floor() - 0.5).abs();
+    let street = to_street(cell.x).max(to_street(cell.y)).max(to_street(cell.z));
+    let block = 1.0 - smoothstep(0.36, 0.42, street);
 
-    let edge = |limit: f32| {
-        1.0 - smoothstep(limit - EYE_EDGE_SOFTNESS, limit + EYE_EDGE_SOFTNESS, v.abs())
-    };
-    // Las puntas se desvanecen en vez de terminar en un corte.
-    let inside = 1.0 - smoothstep(0.82, 1.08, across);
+    let standing = if cell_random(seed, 30) < 0.62 { 1.0 } else { 0.0 };
+    let tone = 0.14 + cell_random(seed, 31) * 0.30;
+    let building = color(tone, tone * 0.95, tone * 0.85);
 
-    EyeShape {
-        opening: edge(height * open) * inside * smoothstep(0.0, 0.12, open),
-        almond: edge(height) * inside,
-        socket: (1.0 - smoothstep(0.0, 0.11, v.abs() - height)) * (1.0 - smoothstep(1.0, 1.35, across)),
-    }
-}
-
-/// Ojo del lado iluminado: iris esmeralda con fibras y pupila redonda, sobre una
-/// esclerótica que sale del mismo color de la atmósfera. Mira un poco a los lados.
-/// Devuelve el color de la superficie y la parte visible del globo.
-fn day_eye(u: f32, v: f32, time: f32, atmosphere: Vector3) -> (Vector3, f32) {
-    let shape = eye_shape(u, v, blink(time, DAY_BLINK_PERIOD, DAY_BLINK_LENGTH));
-
-    // La atmósfera se oscurece alrededor y baja hasta cubrir el ojo cerrado.
-    let surroundings = atmosphere * (1.0 - shape.socket * 0.6);
-    let eyelid = atmosphere * (0.45 + smoothstep(0.0, 0.07, v.abs()) * 0.35);
-    let closed = mix(surroundings, eyelid, shape.almond);
-    if shape.opening <= 0.0 {
-        return (closed, 0.0);
-    }
-
-    let du = u - (time * 0.31).sin() * 0.035;
-    let dv = v - (time * 0.23).sin() * 0.012;
-    let radius = (du * du + dv * dv).sqrt() / IRIS_RADIUS;
-    let angle = dv.atan2(du);
-
-    let fibers = (angle * 22.0).sin() * 0.5 + (angle * 37.0 + 2.0).sin() * 0.5;
-    let iris = mix(color(0.10, 0.80, 0.55), color(0.03, 0.26, 0.26), smoothstep(0.35, 1.0, radius));
-    let iris = iris * (0.85 + fibers * 0.15);
-    let iris = iris * (1.0 - smoothstep(0.78, 1.05, radius) * 0.7);
-
-    // Esclerótica: gas pálido, no blanco. Conserva las bandas que pasan por detrás.
-    let pale = color(0.76, 0.86, 0.58) * (1.0 - (v.abs() / EYE_HEIGHT) * 0.35);
-    let sclera = mix(pale, atmosphere, 0.25);
-    let globe = mix(iris, sclera, smoothstep(0.92, 1.12, radius));
-    let globe = mix(color(0.01, 0.03, 0.03), globe, smoothstep(0.30, 0.46, radius));
-
-    // Brillo difuso sobre el iris.
-    let (hu, hv) = (du + IRIS_RADIUS * 0.34, dv - IRIS_RADIUS * 0.36);
-    let glint = (1.0 - smoothstep(0.004, 0.032, (hu * hu + hv * hv).sqrt())) * 0.7;
-    let globe = mix(globe, color(0.92, 0.98, 0.86), glint);
-
-    let globe = mix(globe, atmosphere, EYE_ATMOSPHERE_BLEND * smoothstep(0.5, 1.2, radius));
-    (mix(closed, globe, shape.opening), shape.opening)
-}
-
-/// Ojo del lado oscuro: iris rojo encendido con pupila de reptil que sigue a la
-/// cámara, sobre gas enfermo atravesado por hilos rojos. Parpadea lento y a
-/// destiempo, y al cerrarse solo queda un resplandor. Devuelve el color de la
-/// superficie y su luz propia.
-fn night_eye(
-    noise: &OpenSimplex,
-    p: Vector3,
-    u: f32,
-    v: f32,
-    gaze: (f32, f32),
-    time: f32,
-    atmosphere: Vector3,
-) -> (Vector3, Vector3) {
-    let open = blink(time, NIGHT_BLINK_PERIOD, NIGHT_BLINK_LENGTH)
-        .min(blink(time, NIGHT_SECOND_BLINK_PERIOD, NIGHT_SECOND_BLINK_LENGTH));
-    let shape = eye_shape(u, v, open);
-
-    // Resplandor: se extiende más allá de la cuenca y se ve aun con el ojo cerrado.
-    let reach = (u * u + v * v).sqrt();
-    let halo = (1.0 - smoothstep(0.06, 0.55, reach)) * NIGHT_HALO * (0.35 + open * 0.65);
-    let halo = color(1.0, 0.05, 0.02) * halo;
-
-    let surface = atmosphere * (1.0 - shape.socket * 0.7);
-    let surface = surface * (1.0 - shape.opening * (1.0 - EYE_ATMOSPHERE_BLEND));
-    if shape.opening <= 0.0 {
-        return (surface, halo);
-    }
-
-    let du = u - gaze.0 * NIGHT_GAZE_REACH;
-    let dv = v - gaze.1 * NIGHT_GAZE_REACH * 0.5;
-    let radius = (du * du + dv * dv).sqrt() / IRIS_RADIUS;
-    let angle = dv.atan2(du);
-
-    // Hilos: donde el ruido cruza por 0 se forman líneas, deformadas por el gas.
-    let thread = sample(noise, p * 15.0 + color(u, v, 0.0) * 6.0 + color(time * 0.05, 0.0, 0.0)).abs();
-    let vein = 1.0 - smoothstep(0.015, 0.10, thread);
-    // La atmósfera aquí es luz propia en el lado oscuro: sin atenuarla se vería de día.
-    let sclera = mix(atmosphere * 0.16 + color(0.07, 0.012, 0.01), color(0.62, 0.035, 0.02), vein * 0.8);
-
-    let fibers = (angle * 26.0).sin() * 0.5 + 0.5;
-    let iris = mix(color(1.0, 0.13, 0.03), color(0.30, 0.0, 0.015), smoothstep(0.2, 1.0, radius));
-    let iris = iris * (0.78 + fibers * 0.30);
-    let globe = mix(iris, sclera, smoothstep(0.90, 1.14, radius));
-
-    // Pupila vertical: se angosta hacia arriba y hacia abajo. Late despacio.
-    let width = IRIS_RADIUS * (0.17 + (time * 1.3).sin() * 0.04);
-    let along = (dv / (IRIS_RADIUS * 0.95)).abs();
-    let slit = du.abs() - width * (1.0 - along * along).max(0.0);
-    let pupil = (1.0 - smoothstep(-0.004, 0.012, slit)) * (1.0 - smoothstep(0.95, 1.05, along));
-    let globe = mix(globe, color(0.0, 0.0, 0.0), pupil);
-
-    (surface, globe * shape.opening + halo)
+    // La ciudad solo aparece lejos de la orilla: los bordes son pura tierra rota.
+    let city = smoothstep(0.008, 0.03, depth_inland);
+    mix(scorched, building, block * standing * city)
 }
 
 /// Desplazamiento de las bandas en un punto. Una capa de ruido distorsiona a la
@@ -241,32 +127,16 @@ fn band_color(value: f32) -> Vector3 {
     mix(ramp, sick, smoothstep(0.74, 0.97, value))
 }
 
-/// Coordenadas del punto en el plano del ojo, empujadas por un ruido que se mueve
-/// con la atmósfera. El gas deforma al ojo, y por eso no parece pegado encima.
-fn warped_coordinates(
-    noise: &OpenSimplex,
-    p: Vector3,
-    right: Vector3,
-    up: Vector3,
-    time: f32,
-) -> (f32, f32) {
-    let t = time * FLOW_SPEED * 2.0;
-    let push_u = fbm(noise, p * 5.0 + color(t, 9.0, 2.0), 2) - 0.5;
-    let push_v = fbm(noise, p * 5.0 + color(-4.0, t, 16.0), 2) - 0.5;
-    (p.dot(right) + push_u * EYE_WARP, p.dot(up) + push_v * EYE_WARP)
-}
-
 pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
     let noise = &uniforms.noise;
     let time = uniforms.time;
     let p = fragment.object_position.normalize();
-    let day_center = DAY_EYE_CENTER.normalize();
-    let night_center = NIGHT_EYE_CENTER.normalize();
 
-    // Se calculan las bandas en el punto girado: los ojos no están encima de un
-    // dibujo, sino que el patrón que ya existe se curva a su alrededor.
-    let swirled = swirl(swirl(p, day_center), night_center);
-    let atmosphere = band_color(band_value(noise, swirled, time));
+    // Se calculan las bandas en el punto girado: la tormenta no se dibuja encima,
+    // sino que curva el patrón que ya existe.
+    let swirled = swirl(p, STORM_CENTER.normalize());
+    let value = band_value(noise, swirled, time);
+    let atmosphere = band_color(value);
 
     // Vetas de ceniza: ruido muy estirado que apaga parte de las bandas.
     let streak_point = color(swirled.x * 1.6, swirled.y * 8.0, swirled.z * 1.6);
@@ -274,23 +144,16 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
     let mut surface = atmosphere * (1.0 - streaks * ASH_AMOUNT);
     let mut emission = Vector3::zero();
 
-    if p.dot(day_center) > 0.5 {
-        let (right, up) = eye_axes(day_center);
-        let (u, v) = warped_coordinates(noise, p, right, up, time);
-        let (eyed, visible) = day_eye(u, v, time, surface);
-        surface = eyed;
-        emission += eyed * visible * DAY_EYE_GLOW;
-    }
+    // Los restos no se mueven y el gas sí: las bandas más densas les pasan por
+    // encima y los van tapando y destapando.
+    let (ruin, inland) = ruin_mask(noise, p);
+    if ruin > 0.0 {
+        let cover = smoothstep(0.62, 0.95, value) * 0.85;
+        surface = mix(surface, ruin_color(noise, p, inland), ruin * (1.0 - cover));
 
-    if p.dot(night_center) > 0.5 {
-        let (right, up) = eye_axes(night_center);
-        // Dirección hacia la cámara en el plano del ojo: el iris se corre hacia ahí.
-        let to_camera = (uniforms.camera_position - night_center).normalize();
-        let gaze = (to_camera.dot(right), to_camera.dot(up));
-        let (u, v) = warped_coordinates(noise, p, right, up, time);
-        let (eyed, light) = night_eye(noise, p, u, v, gaze, time, surface);
-        surface = eyed;
-        emission += light;
+        // La orilla brilla como si el veneno estuviera corroyendo la tierra.
+        let shore = ruin * (1.0 - smoothstep(0.0, 0.02, inland));
+        emission += color(0.42, 0.95, 0.12) * shore * SHORE_GLOW * (1.0 - cover);
     }
 
     surface * (0.1 + fragment.intensity * 0.9) + emission
@@ -300,24 +163,39 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
 mod tests {
     use super::*;
 
+    fn point(i: usize) -> Vector3 {
+        let angle = i as f32 * 2.4;
+        let y = 1.0 - i as f32 / 1000.0;
+        let r = (1.0 - y * y).max(0.0).sqrt();
+        color(r * angle.cos(), y, r * angle.sin())
+    }
+
     #[test]
-    fn eyes_are_on_opposite_sides_of_the_light() {
-        // La misma luz que usa `Uniforms`.
-        let light = color(0.6, 0.5, 0.7).normalize();
-        assert!(DAY_EYE_CENTER.normalize().dot(light) > 0.3);
-        assert!(NIGHT_EYE_CENTER.normalize().dot(light) < -0.3);
+    fn ruins_cover_only_part_of_the_planet() {
+        let noise = OpenSimplex::new(7);
+        let covered = (0..2000).filter(|&i| ruin_mask(&noise, point(i)).0 > 0.5).count();
+        assert!((100..1000).contains(&covered), "cubren {covered} de 2000 puntos");
+    }
+
+    #[test]
+    fn ruins_stay_in_place_while_the_gas_moves() {
+        // `ruin_mask` no recibe el tiempo: solo puede cambiar el gas.
+        let noise = OpenSimplex::new(7);
+        let p = point(700);
+        assert_eq!(ruin_mask(&noise, p), ruin_mask(&noise, p));
+        assert_ne!(band_value(&noise, p, 0.0), band_value(&noise, p, 30.0));
     }
 
     #[test]
     fn swirl_leaves_points_outside_the_storm_untouched() {
-        let center = DAY_EYE_CENTER.normalize();
+        let center = STORM_CENTER.normalize();
         let far = center * -1.0;
         assert!((swirl(far, center) - far).length() < 1e-6);
     }
 
     #[test]
     fn swirl_rotates_inside_keeping_the_distance_to_the_center() {
-        let center = DAY_EYE_CENTER.normalize();
+        let center = STORM_CENTER.normalize();
         let near = (center + color(0.15, 0.05, 0.0)).normalize();
         let swirled = swirl(near, center);
 
@@ -328,33 +206,11 @@ mod tests {
     /// El giro debe llegar a 0 en el borde: si no, las bandas tendrían un corte.
     #[test]
     fn swirl_is_continuous_at_the_storm_edge() {
-        let center = DAY_EYE_CENTER.normalize();
+        let center = STORM_CENTER.normalize();
         let side = center.cross(color(0.0, 1.0, 0.0)).normalize();
         let at = |angle: f32| center * angle.cos() + side * angle.sin();
-        let just_inside = at(VORTEX_RADIUS - 0.001);
+        let just_inside = at(STORM_RADIUS - 0.001);
         assert!((swirl(just_inside, center) - just_inside).length() < 1e-3);
-    }
-
-    #[test]
-    fn blink_closes_once_per_period_and_stays_open_otherwise() {
-        assert_eq!(blink(DAY_BLINK_LENGTH + 0.1, DAY_BLINK_PERIOD, DAY_BLINK_LENGTH), 1.0);
-        assert!(blink(DAY_BLINK_LENGTH * 0.5, DAY_BLINK_PERIOD, DAY_BLINK_LENGTH) < 0.01);
-    }
-
-    #[test]
-    fn closed_eye_hides_the_globe_but_keeps_the_almond() {
-        let open = eye_shape(0.0, 0.05, 1.0);
-        let closed = eye_shape(0.0, 0.05, 0.0);
-        assert!(open.opening > 0.99);
-        assert!(closed.opening < 0.01);
-        assert!(closed.almond > 0.99);
-    }
-
-    #[test]
-    fn eye_shape_ends_outside_the_almond() {
-        let far = eye_shape(EYE_WIDTH * 2.0, 0.0, 1.0);
-        assert_eq!(far.almond, 0.0);
-        assert_eq!(far.socket, 0.0);
     }
 
     #[test]
