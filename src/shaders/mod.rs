@@ -1,6 +1,7 @@
 mod jungle;
 pub mod noise_helpers;
 mod sun;
+mod toxic;
 
 use raylib::prelude::*;
 
@@ -58,9 +59,6 @@ pub fn fragment_shader(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
     match uniforms.body {
         Body::Jungle => jungle::shade(fragment, uniforms),
         Body::RedSun => sun::shade(fragment, uniforms),
-        // Pendiente: esfera gris hasta que tenga su shader.
-        Body::Toxic => {
-            Vector3::new(0.75, 0.75, 0.75) * (0.12 + fragment.intensity * 0.88)
-        }
+        Body::Toxic => toxic::shade(fragment, uniforms),
     }
 }
