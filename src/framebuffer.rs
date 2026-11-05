@@ -5,27 +5,20 @@ pub struct Framebuffer {
     pub height: usize,
     pub colors: Vec<Vector3>,
     pub depths: Vec<f32>,
-    background: Vector3,
     pixels: Vec<u8>,
     texture: Option<Texture2D>,
 }
 
 impl Framebuffer {
-    pub fn new(width: usize, height: usize, background: Vector3) -> Self {
+    pub fn new(width: usize, height: usize) -> Self {
         Framebuffer {
             width,
             height,
-            colors: vec![background; width * height],
+            colors: vec![Vector3::zero(); width * height],
             depths: vec![f32::INFINITY; width * height],
-            background,
             pixels: vec![0; width * height * 4],
             texture: None,
         }
-    }
-
-    pub fn clear(&mut self) {
-        self.colors.fill(self.background);
-        self.depths.fill(f32::INFINITY);
     }
 
     pub fn init_texture(&mut self, window: &mut RaylibHandle, thread: &RaylibThread) {

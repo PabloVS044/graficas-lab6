@@ -1,3 +1,5 @@
+pub mod noise_helpers;
+
 use raylib::prelude::*;
 
 use crate::Uniforms;
@@ -31,6 +33,12 @@ impl Body {
             Body::RedSun => "sol",
         }
     }
+}
+
+/// 0 antes de `start`, 1 después de `end` y una transición suave entre ambos.
+pub fn smoothstep(start: f32, end: f32, value: f32) -> f32 {
+    let t = ((value - start) / (end - start)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// Elige el shader del cuerpo activo. Pendientes: esfera gris hasta que tengan

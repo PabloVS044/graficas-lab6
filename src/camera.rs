@@ -4,6 +4,24 @@ const START_YAW: f32 = 0.0;
 const START_PITCH: f32 = 0.0;
 const START_DISTANCE: f32 = 2.6;
 
+/// Calcula hacia dónde mira cada píxel de la ventana.
+pub struct CameraRays {
+    forward: Vector3,
+    right: Vector3,
+    up: Vector3,
+    width: f32,
+    height: f32,
+}
+
+impl CameraRays {
+    /// Dirección normalizada del rayo que sale de la cámara por el píxel.
+    pub fn direction(&self, x: usize, y: usize) -> Vector3 {
+        let ndc_x = (x as f32 + 0.5) / self.width * 2.0 - 1.0;
+        let ndc_y = 1.0 - (y as f32 + 0.5) / self.height * 2.0;
+        (self.forward + self.right * ndc_x + self.up * ndc_y).normalize()
+    }
+}
+
 /// Cámara que orbita alrededor del centro de la esfera.
 pub struct OrbitCamera {
     pub yaw: f32,
@@ -34,6 +52,22 @@ impl OrbitCamera {
             Vector3::zero(),
             Vector3::new(0.0, 1.0, 0.0),
         )
+    }
+
+    pub fn rays(&self, field_of_view: f32, width: usize, height: usize) -> CameraRays {
+        let forward = (Vector3::zero() - self.position()).normalize();
+        let right = forward.cross(Vector3::new(0.0, 1.0, 0.0)).normalize();
+        let up = right.cross(forward);
+        let half_height = (field_of_view * 0.5).tan();
+        let half_width = half_height * width as f32 / height as f32;
+
+        CameraRays {
+            forward,
+            right: right * half_width,
+            up: up * half_height,
+            width: width as f32,
+            height: height as f32,
+        }
     }
 
     /// Flechas: orbitar. Rueda del mouse: acercar. Inicio: reiniciar.
