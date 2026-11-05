@@ -1,5 +1,6 @@
 //! Planeta rocoso cubierto de selva: mar, costa, selva, ríos y mesetas de roca,
-//! con una capa de nubes que se mueve por su cuenta y proyecta sombras.
+//! con una capa de nubes que se mueve por su cuenta y proyecta sombras. El agua
+//! refleja la luz; la selva y la roca son mates.
 
 use noise::OpenSimplex;
 use raylib::prelude::*;
@@ -34,6 +35,12 @@ const CLOUD_OPACITY: f32 = 0.92;
 /// Altura de las nubes sobre el suelo (el radio del planeta es 1). Más alto
 /// separa más la sombra de su nube.
 const CLOUD_ALTITUDE: f32 = 0.07;
+/// Tamaño del reflejo en el agua: más alto da un brillo más pequeño y concentrado.
+const WATER_SHININESS: f32 = 70.0;
+/// Fuerza del reflejo en el agua: 0 la deja tan mate como la selva.
+const WATER_REFLECTION: f32 = 0.85;
+/// Parte del reflejo del agua que conservan los ríos.
+const RIVER_REFLECTION: f32 = 0.3;
 /// Cuánto oscurece la sombra: 0 no se ve, 1 deja el suelo negro.
 const SHADOW_STRENGTH: f32 = 0.72;
 
@@ -69,6 +76,18 @@ fn point_towards_light(p: Vector3, light: Vector3) -> Vector3 {
     let c = 1.0 - radius * radius;
     let t = -b + (b * b - c).sqrt();
     (p + light * t).normalize()
+}
+
+/// Reflejo especular (Blinn-Phong): es máximo cuando la normal coincide con el
+/// punto medio entre la dirección de la luz y la de la cámara. Por eso, a
+/// diferencia de `intensity`, cambia al mover la cámara.
+fn specular(normal: Vector3, light: Vector3, view: Vector3, shininess: f32) -> f32 {
+    // Sin esto el brillo aparecería en el lado que no recibe luz.
+    if normal.dot(light) <= 0.0 {
+        return 0.0;
+    }
+    let halfway = (light + view).normalize();
+    normal.dot(halfway).max(0.0).powf(shininess)
 }
 
 pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
@@ -107,6 +126,10 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
     let highland = smoothstep(HIGHLAND_LEVEL - 0.015, HIGHLAND_LEVEL + 0.015, height);
     let ground = mix(jungle, rock, highland);
 
+    // Máscara de agua: el mar y, con menos brillo, los ríos de las tierras bajas.
+    // A pleno brillo un río tan delgado se ve como un alambre blanco.
+    let water = (1.0 - land) + land * river * lowland * (1.0 - highland) * RIVER_REFLECTION;
+
     let surface = mix(sea, ground, land);
 
     // Sombra: si hay una nube en el camino hacia la luz, el suelo recibe menos.
@@ -115,13 +138,26 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
     // la sombra se mueve con la nube y cambia con la dirección de la luz.
     let above = point_towards_light(p, uniforms.light_direction);
     let shadow = cloud_density(noise, above, uniforms.time, CLOUD_COVERAGE);
-    let surface = surface * (1.0 - shadow * SHADOW_STRENGTH);
+    let sunlight = 1.0 - shadow * SHADOW_STRENGTH;
+    let surface = surface * sunlight;
 
     // Las nubes reciben la misma luz que la superficie que tapan.
     let cloud = cloud_density(noise, p, uniforms.time, CLOUD_COVERAGE) * CLOUD_OPACITY;
     let lit = mix(surface, color(0.66, 0.70, 0.68), cloud);
 
-    lit * (0.1 + fragment.intensity * 0.9)
+    // El reflejo solo aparece en el agua. Las nubes lo tapan y su sombra lo apaga.
+    let view = (uniforms.camera_position - fragment.world_position).normalize();
+    let glint = specular(
+        fragment.normal,
+        uniforms.light_direction,
+        view,
+        WATER_SHININESS,
+    ) * WATER_REFLECTION
+        * water
+        * sunlight
+        * (1.0 - cloud);
+
+    lit * (0.1 + fragment.intensity * 0.9) + color(1.0, 0.95, 0.82) * glint
 }
 
 #[cfg(test)]
@@ -162,6 +198,18 @@ mod tests {
         // La sombra de una nube cae al lado contrario de la luz: la nube que
         // tapa a `p` está corrida hacia la luz.
         assert!(high.x > 0.0 && low.x > high.x);
+    }
+
+    #[test]
+    fn specular_peaks_at_mirror_angle_and_ignores_the_dark_side() {
+        let normal = color(0.0, 1.0, 0.0);
+        let light = color(0.5, 0.8, 0.0).normalize();
+        let mirror = color(-0.5, 0.8, 0.0).normalize();
+        let away = color(0.9, 0.3, 0.0).normalize();
+
+        assert!(specular(normal, light, mirror, 70.0) > 0.99);
+        assert!(specular(normal, light, away, 70.0) < 0.2);
+        assert_eq!(specular(normal, -light, mirror, 70.0), 0.0);
     }
 
     #[test]

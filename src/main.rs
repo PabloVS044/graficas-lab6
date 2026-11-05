@@ -32,7 +32,6 @@ pub struct Uniforms {
     pub projection: Matrix,
     pub width: usize,
     pub height: usize,
-    #[allow(dead_code)] // Lo usarán los reflejos y el parallax.
     pub camera_position: Vector3,
     pub rays: CameraRays,
     /// Dirección normalizada que va del planeta hacia la luz.
