@@ -1,7 +1,7 @@
 //! Mundo tóxico: gigante gaseoso de atmósfera envenenada, con bandas de verde
 //! ácido, ceniza y lodo que fluyen como un líquido, y una tormenta que las curva.
-//! Entre el gas flotan los restos de lo que fue tierra firme, con las manzanas de
-//! una ciudad en ruinas.
+//! Entre el gas flotan los restos de lo que fue una ciudad: piezas de cemento gris
+//! agrietadas.
 
 use noise::OpenSimplex;
 use raylib::prelude::*;
@@ -33,8 +33,12 @@ const RUIN_SCALE: f32 = 2.5;
 const RUIN_THRESHOLD: f32 = 0.55;
 /// Cuánto se rompe el borde de los restos.
 const RUIN_BREAKUP: f32 = 0.22;
-/// Tamaño de las manzanas: más alto da manzanas más pequeñas y numerosas.
-const CITY_GRID: f32 = 24.0;
+/// Tamaño de las piezas de cemento: más alto da piezas más pequeñas y numerosas.
+const SHARD_SCALE: f32 = 13.0;
+/// Ancho de las grietas entre piezas.
+const CRACK_WIDTH: f32 = 0.09;
+/// Fracción de piezas que siguen en su lugar.
+const SHARD_SURVIVAL: f32 = 0.85;
 /// Fuerza del brillo tóxico en la orilla de los restos: 0 lo apaga.
 const SHORE_GLOW: f32 = 0.35;
 
@@ -66,32 +70,67 @@ fn ruin_mask(noise: &OpenSimplex, p: Vector3) -> (f32, f32) {
     )
 }
 
-/// Color de los restos: tierra quemada y, más adentro, una cuadrícula de manzanas
-/// separadas por calles. Cada manzana tiene su tono y algunas ya no existen.
-fn ruin_color(noise: &OpenSimplex, p: Vector3, depth_inland: f32) -> Vector3 {
-    let scorched = mix(
-        color(0.055, 0.045, 0.035),
-        color(0.20, 0.16, 0.11),
-        fbm(noise, p * 24.0, 2),
+/// Datos de la pieza de cemento más cercana a un punto (ruido celular).
+struct Shard {
+    /// Distancia hasta la grieta que la separa de su vecina: 0 sobre la grieta.
+    to_crack: f32,
+    /// Celda de la pieza. Sirve para darle un tono propio.
+    id: (i32, i32, i32),
+}
+
+/// Reparte un punto al azar en cada celda de una cuadrícula y busca los dos más
+/// cercanos. Cada punto es el centro de una pieza de forma irregular, y donde los
+/// dos más cercanos quedan a la misma distancia hay una grieta.
+fn nearest_shard(position: Vector3) -> Shard {
+    let (cx, cy, cz) = (
+        position.x.floor() as i32,
+        position.y.floor() as i32,
+        position.z.floor() as i32,
     );
+    let mut nearest = f32::MAX;
+    let mut second = f32::MAX;
+    let mut id = (cx, cy, cz);
 
-    let cell = p * CITY_GRID;
-    let (cx, cy, cz) = (cell.x.floor(), cell.y.floor(), cell.z.floor());
-    let seed = (cx as i32, cy as i32, cz as i32);
+    for x in cx - 1..=cx + 1 {
+        for y in cy - 1..=cy + 1 {
+            for z in cz - 1..=cz + 1 {
+                let cell = (x, y, z);
+                let dx = x as f32 + cell_random(cell, 40) - position.x;
+                let dy = y as f32 + cell_random(cell, 41) - position.y;
+                let dz = z as f32 + cell_random(cell, 42) - position.z;
+                let distance = (dx * dx + dy * dy + dz * dz).sqrt();
 
-    // Distancia a la calle más cercana, medida en los dos ejes más anchos de la
-    // superficie para que las calles sigan viéndose rectas.
-    let to_street = |value: f32| (value - value.floor() - 0.5).abs();
-    let street = to_street(cell.x).max(to_street(cell.y)).max(to_street(cell.z));
-    let block = 1.0 - smoothstep(0.36, 0.42, street);
+                if distance < nearest {
+                    second = nearest;
+                    nearest = distance;
+                    id = cell;
+                } else if distance < second {
+                    second = distance;
+                }
+            }
+        }
+    }
 
-    let standing = if cell_random(seed, 30) < 0.62 { 1.0 } else { 0.0 };
-    let tone = 0.14 + cell_random(seed, 31) * 0.30;
-    let building = color(tone, tone * 0.95, tone * 0.85);
+    Shard { to_crack: second - nearest, id }
+}
 
-    // La ciudad solo aparece lejos de la orilla: los bordes son pura tierra rota.
-    let city = smoothstep(0.008, 0.03, depth_inland);
-    mix(scorched, building, block * standing * city)
+/// Color de los restos: piezas de cemento gris de formas irregulares, cada una
+/// con su tono, separadas por grietas. Algunas faltan y dejan ver el hueco.
+fn ruin_color(noise: &OpenSimplex, p: Vector3) -> Vector3 {
+    let shard = nearest_shard(p * SHARD_SCALE);
+
+    // Tono propio de la pieza, con manchas finas para que parezca material gastado.
+    let tone = 0.26 + cell_random(shard.id, 43) * 0.30;
+    let stains = 0.78 + fbm(noise, p * 42.0, 2) * 0.42;
+    let cement = color(tone, tone * 0.98, tone * 0.93) * stains;
+
+    let gap = color(0.035, 0.035, 0.035);
+    let missing = cell_random(shard.id, 44) > SHARD_SURVIVAL;
+    if missing {
+        return gap;
+    }
+
+    mix(gap, cement, smoothstep(0.0, CRACK_WIDTH, shard.to_crack))
 }
 
 /// Desplazamiento de las bandas en un punto. Una capa de ruido distorsiona a la
@@ -149,7 +188,7 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
     let (ruin, inland) = ruin_mask(noise, p);
     if ruin > 0.0 {
         let cover = smoothstep(0.62, 0.95, value) * 0.85;
-        surface = mix(surface, ruin_color(noise, p, inland), ruin * (1.0 - cover));
+        surface = mix(surface, ruin_color(noise, p), ruin * (1.0 - cover));
 
         // La orilla brilla como si el veneno estuviera corroyendo la tierra.
         let shore = ruin * (1.0 - smoothstep(0.0, 0.02, inland));
@@ -184,6 +223,14 @@ mod tests {
         let p = point(700);
         assert_eq!(ruin_mask(&noise, p), ruin_mask(&noise, p));
         assert_ne!(band_value(&noise, p, 0.0), band_value(&noise, p, 30.0));
+    }
+
+    #[test]
+    fn shards_have_cracks_and_different_tones() {
+        let shards: Vec<Shard> = (0..2000).map(|i| nearest_shard(point(i) * SHARD_SCALE)).collect();
+        assert!(shards.iter().any(|shard| shard.to_crack < 0.05));
+        assert!(shards.iter().any(|shard| shard.to_crack > 0.3));
+        assert!(shards.iter().any(|shard| shard.id != shards[0].id));
     }
 
     #[test]
