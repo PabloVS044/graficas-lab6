@@ -1,11 +1,12 @@
 //! Planeta rocoso cubierto de selva: mar, costa, selva, ríos y mesetas de roca,
 //! con una capa de nubes que se mueve por su cuenta y proyecta sombras. El agua
-//! refleja la luz; la selva y la roca son mates.
+//! refleja la luz; la selva y la roca son mates. En el lado de noche la selva se
+//! llena de luciérnagas.
 
 use noise::OpenSimplex;
 use raylib::prelude::*;
 
-use super::noise_helpers::{fbm, sample};
+use super::noise_helpers::{cell_random, fbm, sample};
 use super::{mix, smoothstep};
 use crate::Uniforms;
 use crate::fragment::Fragment;
@@ -41,6 +42,16 @@ const WATER_SHININESS: f32 = 70.0;
 const WATER_REFLECTION: f32 = 0.85;
 /// Parte del reflejo del agua que conservan los ríos.
 const RIVER_REFLECTION: f32 = 0.3;
+/// Tamaño de las luciérnagas: más alto da puntos más pequeños y numerosos.
+const FIREFLY_GRID: f32 = 72.0;
+/// Fracción de celdas de la cuadrícula que tienen una luciérnaga.
+const FIREFLY_CHANCE: f32 = 0.55;
+/// Velocidad con la que parpadean.
+const FIREFLY_BLINK_SPEED: f32 = 2.2;
+/// Fuerza de su luz: 0 las apaga.
+const FIREFLY_BRIGHTNESS: f32 = 1.5;
+/// Cuánto ocultan las nubes las luces de la noche.
+const CLOUD_LIGHT_BLOCK: f32 = 0.8;
 /// Cuánto oscurece la sombra: 0 no se ve, 1 deja el suelo negro.
 const SHADOW_STRENGTH: f32 = 0.72;
 
@@ -88,6 +99,48 @@ fn specular(normal: Vector3, light: Vector3, view: Vector3, shininess: f32) -> f
     }
     let halfway = (light + view).normalize();
     normal.dot(halfway).max(0.0).powf(shininess)
+}
+
+/// 0 en el lado iluminado y 1 en el de noche, con una transición en el borde.
+fn night_factor(normal: Vector3, light: Vector3) -> f32 {
+    1.0 - smoothstep(-0.14, 0.05, normal.dot(light))
+}
+
+/// Luces diminutas repartidas por una cuadrícula. Algunas celdas tienen un punto
+/// que parpadea y se mueve un poco. Devuelve su brillo, de 0 a 1.
+fn sparkle(p: Vector3, grid: f32, chance: f32, size: f32, salt: u32, time: f32, speed: f32) -> f32 {
+    let cell = p * grid;
+    let (cx, cy, cz) = (cell.x.floor(), cell.y.floor(), cell.z.floor());
+    let seed = (cx as i32, cy as i32, cz as i32);
+
+    if cell_random(seed, salt) > chance {
+        return 0.0;
+    }
+
+    let phase = cell_random(seed, salt + 1) * std::f32::consts::TAU;
+    let wander = (time * 0.7 + phase).sin() * 0.12;
+    let dx = cell.x - cx - (0.25 + cell_random(seed, salt + 2) * 0.5) - wander;
+    let dy = cell.y - cy - (0.25 + cell_random(seed, salt + 3) * 0.5) + wander;
+    let dz = cell.z - cz - (0.25 + cell_random(seed, salt + 4) * 0.5);
+    let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+
+    let glow = 1.0 - smoothstep(size * 0.3, size, distance);
+    let blink = (time * speed + phase).sin() * 0.5 + 0.5;
+    glow * blink
+}
+
+/// Luz de las luciérnagas en un punto de selva. Vuelan en enjambres: un ruido de
+/// baja frecuencia decide dónde hay muchas y dónde ninguna.
+fn fireflies(noise: &OpenSimplex, p: Vector3, time: f32) -> Vector3 {
+    let swarm = smoothstep(0.46, 0.60, fbm(noise, p * 6.5 + color(-9.0, 14.0, 3.0), 2));
+    if swarm <= 0.0 {
+        return Vector3::zero();
+    }
+
+    let light = sparkle(p, FIREFLY_GRID, FIREFLY_CHANCE, 0.42, 10, time, FIREFLY_BLINK_SPEED);
+    // Además de los puntos, el enjambre tiñe apenas la selva debajo.
+    let haze = color(0.012, 0.035, 0.008);
+    (color(0.72, 1.0, 0.22) * light * FIREFLY_BRIGHTNESS + haze) * swarm
 }
 
 pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
@@ -157,7 +210,17 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
         * sunlight
         * (1.0 - cloud);
 
-    lit * (0.1 + fragment.intensity * 0.9) + color(1.0, 0.95, 0.82) * glint
+    // Luces de la noche: no dependen del sol, así que se suman después de
+    // iluminar, y solo existen del lado oscuro. Se calculan solo si hacen falta.
+    let night = night_factor(fragment.normal, uniforms.light_direction);
+    let jungle_only = land * (1.0 - highland) * (1.0 - river * lowland);
+    let night_lights = if night > 0.0 && jungle_only > 0.0 {
+        fireflies(noise, p, uniforms.time) * night * jungle_only * (1.0 - cloud * CLOUD_LIGHT_BLOCK)
+    } else {
+        Vector3::zero()
+    };
+
+    lit * (0.1 + fragment.intensity * 0.9) + color(1.0, 0.95, 0.82) * glint + night_lights
 }
 
 #[cfg(test)]
@@ -210,6 +273,25 @@ mod tests {
         assert!(specular(normal, light, mirror, 70.0) > 0.99);
         assert!(specular(normal, light, away, 70.0) < 0.2);
         assert_eq!(specular(normal, -light, mirror, 70.0), 0.0);
+    }
+
+    #[test]
+    fn night_lights_only_exist_on_the_dark_side() {
+        let light = color(0.0, 1.0, 0.0);
+        assert_eq!(night_factor(light, light), 0.0);
+        assert_eq!(night_factor(-light, light), 1.0);
+    }
+
+    #[test]
+    fn sparkles_blink_over_time() {
+        let p = color(0.6, 0.2, 0.77).normalize();
+        let values: Vec<f32> = (0..2000)
+            .map(|i| {
+                let p = (p + color(i as f32 * 0.002, 0.0, 0.0)).normalize();
+                sparkle(p, 85.0, 1.0, 0.34, 10, 0.0, 2.2) - sparkle(p, 85.0, 1.0, 0.34, 10, 1.5, 2.2)
+            })
+            .collect();
+        assert!(values.iter().any(|difference| difference.abs() > 0.2));
     }
 
     #[test]

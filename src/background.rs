@@ -10,7 +10,7 @@ use raylib::prelude::*;
 
 use crate::Uniforms;
 use crate::framebuffer::Framebuffer;
-use crate::shaders::noise_helpers::fbm;
+use crate::shaders::noise_helpers::{cell_random as random, fbm};
 use crate::shaders::smoothstep;
 
 const TABLE_WIDTH: usize = 1024;
@@ -128,16 +128,4 @@ fn star_color(direction: Vector3) -> Vector3 {
         Vector3::new(0.72, 0.82, 1.0)
     };
     tint * glow * (0.18 + brightness * 0.75)
-}
-
-/// Número pseudoaleatorio entre 0 y 1 para una celda.
-fn random(cell: (i32, i32, i32), salt: u32) -> f32 {
-    let mut hash = (cell.0 as u32).wrapping_mul(73_856_093)
-        ^ (cell.1 as u32).wrapping_mul(19_349_663)
-        ^ (cell.2 as u32).wrapping_mul(83_492_791)
-        ^ salt.wrapping_mul(2_654_435_761);
-    hash ^= hash >> 13;
-    hash = hash.wrapping_mul(1_274_126_177);
-    hash ^= hash >> 16;
-    hash as f32 / u32::MAX as f32
 }

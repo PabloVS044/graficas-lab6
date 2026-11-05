@@ -23,3 +23,15 @@ pub fn fbm(noise: &OpenSimplex, mut position: Vector3, octaves: u32) -> f32 {
 
     value / weight * 0.5 + 0.5
 }
+
+/// Número pseudoaleatorio entre 0 y 1 para una celda.
+pub fn cell_random(cell: (i32, i32, i32), salt: u32) -> f32 {
+    let mut hash = (cell.0 as u32).wrapping_mul(73_856_093)
+        ^ (cell.1 as u32).wrapping_mul(19_349_663)
+        ^ (cell.2 as u32).wrapping_mul(83_492_791)
+        ^ salt.wrapping_mul(2_654_435_761);
+    hash ^= hash >> 13;
+    hash = hash.wrapping_mul(1_274_126_177);
+    hash ^= hash >> 16;
+    hash as f32 / u32::MAX as f32
+}
