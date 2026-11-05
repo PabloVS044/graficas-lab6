@@ -1,4 +1,5 @@
 mod jungle;
+mod moon;
 pub mod noise_helpers;
 mod sun;
 mod toxic;
@@ -14,6 +15,8 @@ pub enum Body {
     Jungle,
     Toxic,
     RedSun,
+    /// Acompaña a la jungla, así que no se selecciona con una tecla.
+    Moon,
 }
 
 impl Body {
@@ -25,15 +28,7 @@ impl Body {
             Body::Jungle => "Jungla",
             Body::Toxic => "Mundo toxico",
             Body::RedSun => "Sol rojo",
-        }
-    }
-
-    /// Nombre del archivo de su captura.
-    pub fn file_name(self) -> &'static str {
-        match self {
-            Body::Jungle => "jungla",
-            Body::Toxic => "toxico",
-            Body::RedSun => "sol",
+            Body::Moon => "Luna",
         }
     }
 }
@@ -59,6 +54,7 @@ pub fn fragment_shader(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
     match uniforms.body {
         Body::Jungle => jungle::shade(fragment, uniforms),
         Body::RedSun => sun::shade(fragment, uniforms),
+        Body::Moon => moon::shade(fragment, uniforms),
         Body::Toxic => toxic::shade(fragment, uniforms),
     }
 }

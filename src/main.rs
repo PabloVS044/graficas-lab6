@@ -26,6 +26,16 @@ const HEIGHT: usize = 600;
 const MODEL_PATH: &str = "sphere.obj";
 const FIELD_OF_VIEW: f32 = 45.0;
 const NOISE_SEED: u32 = 7;
+/// Tamaño de la luna respecto a la esfera original.
+const MOON_SCALE: f32 = 0.14;
+/// Distancia de la luna al centro de la jungla.
+const MOON_ORBIT_RADIUS: f32 = 1.15;
+/// Dónde empieza su órbita, en radianes.
+const MOON_ORBIT_START: f32 = 0.35;
+/// Radianes por segundo que recorre en su órbita.
+const MOON_ORBIT_SPEED: f32 = 0.25;
+/// Inclinación de la órbita, en radianes: 0 la deja en el plano horizontal.
+const MOON_ORBIT_TILT: f32 = 0.35;
 
 /// Valores que no cambian entre los vértices y fragmentos de un mismo cuadro.
 pub struct Uniforms {
@@ -66,6 +76,43 @@ impl Uniforms {
             body,
         }
     }
+
+    /// Los mismos valores del cuadro, con la matriz y el shader de la luna.
+    fn for_moon(&self) -> Self {
+        Uniforms {
+            model: moon_model(self.time),
+            view: self.view,
+            projection: self.projection,
+            width: self.width,
+            height: self.height,
+            camera_position: self.camera_position,
+            rays: self.rays,
+            light_direction: self.light_direction,
+            time: self.time,
+            noise: self.noise.clone(),
+            body: Body::Moon,
+        }
+    }
+}
+
+/// Matriz que pone a la esfera en la órbita de la luna. Siempre le muestra la misma
+/// cara a la jungla, como nuestra luna a la Tierra.
+fn moon_model(time: f32) -> Matrix {
+    let angle = MOON_ORBIT_START + time * MOON_ORBIT_SPEED;
+    let (sin, cos) = angle.sin_cos();
+    let (tilt_sin, tilt_cos) = MOON_ORBIT_TILT.sin_cos();
+
+    // Rota alrededor de `y`, escala y traslada.
+    let mut matrix = Matrix::identity();
+    matrix.m0 = MOON_SCALE * cos;
+    matrix.m2 = -MOON_SCALE * sin;
+    matrix.m5 = MOON_SCALE;
+    matrix.m8 = MOON_SCALE * sin;
+    matrix.m10 = MOON_SCALE * cos;
+    matrix.m12 = MOON_ORBIT_RADIUS * cos;
+    matrix.m13 = MOON_ORBIT_RADIUS * sin * tilt_sin;
+    matrix.m14 = MOON_ORBIT_RADIUS * sin * tilt_cos;
+    matrix
 }
 
 /// Mismo orden que en clase, pero separando la prueba de profundidad del
@@ -78,7 +125,19 @@ fn render(
     uniforms: &Uniforms,
 ) {
     background.paint(framebuffer, uniforms);
+    draw_sphere(framebuffer, vertices, uniforms);
 
+    if uniforms.body == Body::Jungle {
+        draw_sphere(framebuffer, vertices, &uniforms.for_moon());
+    }
+    if uniforms.body == Body::RedSun {
+        rings.paint(framebuffer, uniforms);
+    }
+}
+
+/// Dibuja la esfera con la matriz y el shader de `uniforms`. El búfer de profundidad
+/// decide qué se ve cuando la luna pasa por delante o por detrás de la jungla.
+fn draw_sphere(framebuffer: &mut Framebuffer, vertices: &[Vertex], uniforms: &Uniforms) {
     let transformed: Vec<_> = vertices
         .iter()
         .map(|vertex| pipeline::vertex_shader(vertex, uniforms))
@@ -107,10 +166,6 @@ fn render(
 
     for (index, color) in shaded {
         framebuffer.colors[index] = color;
-    }
-
-    if uniforms.body == Body::RedSun {
-        rings.paint(framebuffer, uniforms);
     }
 }
 
@@ -198,6 +253,27 @@ fn benchmark(background: &Background, rings: &Rings, vertices: &[Vertex], noise:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Con la cámara lo más cerca posible, la luna puede pasarle muy cerca.
+    #[test]
+    fn moon_orbit_clears_the_planet_and_renders_up_close() {
+        let vertices = Obj::load(MODEL_PATH).unwrap().vertex_array();
+        let noise = OpenSimplex::new(NOISE_SEED);
+        let background = Background::new(&noise);
+        let rings = Rings::new();
+        let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT);
+
+        for step in 0..120 {
+            let time = step as f32 * 0.5;
+            let model = moon_model(time);
+            let center = Vector3::new(model.m12, model.m13, model.m14);
+            assert!(center.length() - MOON_SCALE * 0.87 > 0.87, "choca con la jungla");
+
+            let camera = OrbitCamera { yaw: step as f32 * 0.21, pitch: 0.3, distance: 1.3 };
+            let uniforms = Uniforms::new(&camera, time, &noise, Body::Jungle);
+            render(&mut framebuffer, &background, &rings, &vertices, &uniforms);
+        }
+    }
 
     /// La esfera es convexa: en cada fila, los píxeles entre el primero y el
     /// último que la cubren también deben estar cubiertos.

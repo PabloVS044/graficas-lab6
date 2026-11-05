@@ -5,6 +5,7 @@ const START_PITCH: f32 = 0.0;
 const START_DISTANCE: f32 = 2.6;
 
 /// Calcula hacia dónde mira cada píxel de la ventana.
+#[derive(Clone, Copy)]
 pub struct CameraRays {
     forward: Vector3,
     right: Vector3,
