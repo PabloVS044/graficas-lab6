@@ -30,12 +30,6 @@ const THIN_END_RADIUS: f32 = 1.45;
 const THIN_RING_WIDTH: f32 = 0.03;
 /// Velocidad de los delgados: al recorrer más distancia van un poco más lento.
 const THIN_EXPANSION_SPEED: f32 = 0.04;
-/// Borde y franjas de los anillos gruesos.
-const THICK_EDGE_COLOR: Vector3 = Vector3 { x: 1.0, y: 0.11, z: 0.03 };
-const THICK_BAND_COLOR: Vector3 = Vector3 { x: 0.85, y: 0.01, z: 0.005 };
-/// Borde y franjas de los delgados: azul, el color que más contrasta con el rojo.
-const THIN_EDGE_COLOR: Vector3 = Vector3 { x: 0.42, y: 0.80, z: 1.0 };
-const THIN_BAND_COLOR: Vector3 = Vector3 { x: 0.04, y: 0.24, z: 0.95 };
 /// Brillo general: 0 apaga los anillos.
 const RING_BRIGHTNESS: f32 = 2.3;
 /// Brillo de los anillos que pasan por delante del disco, para que no se vean
@@ -53,8 +47,6 @@ struct Ring {
     end_radius: f32,
     width: f32,
     speed: f32,
-    edge_color: Vector3,
-    band_color: Vector3,
 }
 
 /// Estado de un anillo en este cuadro.
@@ -73,15 +65,7 @@ pub struct Rings {
 
 impl Rings {
     pub fn new() -> Self {
-        let mut rings = ring_family(
-            RING_COUNT,
-            0,
-            0.0,
-            END_RADIUS,
-            RING_WIDTH,
-            EXPANSION_SPEED,
-            (THICK_EDGE_COLOR, THICK_BAND_COLOR),
-        );
+        let mut rings = ring_family(RING_COUNT, 0, 0.0, END_RADIUS, RING_WIDTH, EXPANSION_SPEED);
         // Se giran las direcciones para que no coincidan con las de los gruesos.
         rings.extend(ring_family(
             THIN_RING_COUNT,
@@ -90,7 +74,6 @@ impl Rings {
             THIN_END_RADIUS,
             THIN_RING_WIDTH,
             THIN_EXPANSION_SPEED,
-            (THIN_EDGE_COLOR, THIN_BAND_COLOR),
         ));
 
         Rings { rings }
@@ -131,7 +114,6 @@ fn ring_family(
     end_radius: f32,
     width: f32,
     speed: f32,
-    colors: (Vector3, Vector3),
 ) -> Vec<Ring> {
     let golden_angle = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
 
@@ -158,8 +140,6 @@ fn ring_family(
                 end_radius,
                 width,
                 speed,
-                edge_color: colors.0,
-                band_color: colors.1,
             }
         })
         .collect()
@@ -264,20 +244,22 @@ fn ring_light(
     // punteado, así que se desvanece.
     let edge_on = smoothstep(0.03, 0.14, denominator.abs());
 
-    Some(band_color(active.ring, across, angle, time) * active.fade * edge_on)
+    Some(band_color(across, angle, active.ring.phase, time) * active.fade * edge_on)
 }
 
 /// Aspecto de la banda: un borde exterior encendido y franjas rojas adentro,
 /// con pulsos de energía que recorren el anillo.
-fn band_color(ring: &Ring, across: f32, angle: f32, time: f32) -> Vector3 {
+fn band_color(across: f32, angle: f32, phase: f32, time: f32) -> Vector3 {
     let edge = smoothstep(0.72, 0.92, across) * (1.0 - smoothstep(0.92, 1.0, across));
     let stripes = ((across * 3.0 * std::f32::consts::TAU).sin() * 0.5 + 0.5).powi(2)
         * smoothstep(0.0, 0.2, across);
 
-    let turn = ring.phase * std::f32::consts::TAU;
-    let pulse = 0.55 + 0.45 * (angle * 3.0 + turn + time * (0.5 + ring.phase)).sin();
+    let turn = phase * std::f32::consts::TAU;
+    let pulse = 0.55 + 0.45 * (angle * 3.0 + turn + time * (0.5 + phase)).sin();
 
-    mix(ring.band_color * stripes * 0.8, ring.edge_color, edge) * pulse
+    let hot = color(1.0, 0.11, 0.03);
+    let deep_red = color(0.85, 0.01, 0.005);
+    mix(deep_red * stripes * 0.8, hot, edge) * pulse
 }
 
 #[cfg(test)]
@@ -293,8 +275,6 @@ mod tests {
             end_radius: END_RADIUS,
             width: RING_WIDTH,
             speed: EXPANSION_SPEED,
-            edge_color: THICK_EDGE_COLOR,
-            band_color: THICK_BAND_COLOR,
         }
     }
 
