@@ -1,5 +1,5 @@
 //! Planeta rocoso cubierto de selva: mar, costa, selva, ríos y mesetas de roca,
-//! con una capa de nubes que se mueve por su cuenta.
+//! con una capa de nubes que se mueve por su cuenta y proyecta sombras.
 
 use noise::OpenSimplex;
 use raylib::prelude::*;
@@ -31,6 +31,11 @@ const CLOUD_SPEED: f32 = 0.06;
 const CLOUD_SOFTNESS: f32 = 0.07;
 /// Opacidad de la parte más densa de una nube.
 const CLOUD_OPACITY: f32 = 0.92;
+/// Altura de las nubes sobre el suelo (el radio del planeta es 1). Más alto
+/// separa más la sombra de su nube.
+const CLOUD_ALTITUDE: f32 = 0.07;
+/// Cuánto oscurece la sombra: 0 no se ve, 1 deja el suelo negro.
+const SHADOW_STRENGTH: f32 = 0.72;
 
 fn color(r: f32, g: f32, b: f32) -> Vector3 {
     Vector3::new(r, g, b)
@@ -51,6 +56,19 @@ fn cloud_density(noise: &OpenSimplex, p: Vector3, time: f32, coverage: f32) -> f
     // Más cobertura baja el umbral: más valores del ruido cuentan como nube.
     let threshold = 0.70 - coverage * 0.40;
     smoothstep(threshold - CLOUD_SOFTNESS, threshold + CLOUD_SOFTNESS, shape)
+}
+
+/// Punto de la capa de nubes que queda entre `p` y la luz: se sale de `p` hacia
+/// la luz hasta llegar a la esfera de radio `1 + CLOUD_ALTITUDE`.
+///
+/// `p` tiene largo 1, así que `|p + light * t|² = radio²` se reduce a
+/// `t² + 2 * b * t + c = 0`, con `b = p · light` y `c = 1 - radio²`.
+fn point_towards_light(p: Vector3, light: Vector3) -> Vector3 {
+    let radius = 1.0 + CLOUD_ALTITUDE;
+    let b = p.dot(light);
+    let c = 1.0 - radius * radius;
+    let t = -b + (b * b - c).sqrt();
+    (p + light * t).normalize()
 }
 
 pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
@@ -91,6 +109,14 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
 
     let surface = mix(sea, ground, land);
 
+    // Sombra: si hay una nube en el camino hacia la luz, el suelo recibe menos.
+    // La esfera no se transforma, así que objeto y mundo coinciden y la luz se
+    // puede usar tal cual. Se recalcula el ruido en ese otro punto, por lo que
+    // la sombra se mueve con la nube y cambia con la dirección de la luz.
+    let above = point_towards_light(p, uniforms.light_direction);
+    let shadow = cloud_density(noise, above, uniforms.time, CLOUD_COVERAGE);
+    let surface = surface * (1.0 - shadow * SHADOW_STRENGTH);
+
     // Las nubes reciben la misma luz que la superficie que tapan.
     let cloud = cloud_density(noise, p, uniforms.time, CLOUD_COVERAGE) * CLOUD_OPACITY;
     let lit = mix(surface, color(0.66, 0.70, 0.68), cloud);
@@ -119,6 +145,23 @@ mod tests {
     #[test]
     fn more_coverage_means_more_clouds() {
         assert!(average_density(0.0, 0.2) < average_density(0.0, 0.8));
+    }
+
+    #[test]
+    fn shadow_point_is_straight_above_when_light_is_overhead() {
+        let p = color(0.0, 1.0, 0.0);
+        assert!((point_towards_light(p, p) - p).length() < 1e-5);
+    }
+
+    #[test]
+    fn shadow_shifts_more_when_light_is_low() {
+        let p = color(0.0, 1.0, 0.0);
+        let high = point_towards_light(p, color(0.2, 0.98, 0.0).normalize());
+        let low = point_towards_light(p, color(0.95, 0.3, 0.0).normalize());
+
+        // La sombra de una nube cae al lado contrario de la luz: la nube que
+        // tapa a `p` está corrida hacia la luz.
+        assert!(high.x > 0.0 && low.x > high.x);
     }
 
     #[test]
