@@ -39,7 +39,6 @@ pub struct Uniforms {
     pub light_direction: Vector3,
     #[allow(dead_code)] // Lo usarán los shaders animados.
     pub time: f32,
-    #[allow(dead_code)] // Lo usarán los shaders de los cuerpos.
     pub noise: OpenSimplex,
     pub body: Body,
 }
