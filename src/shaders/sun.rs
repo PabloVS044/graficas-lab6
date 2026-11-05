@@ -19,6 +19,8 @@ const TURBULENCE: f32 = 2.6;
 const SPOT_SCALE: f32 = 2.4;
 /// Valor del ruido desde el que hay mancha: más alto da menos manchas.
 const SPOT_THRESHOLD: f32 = 0.60;
+/// Cuánto se oscurecen las manchas: 0 no se notan, 1 quedan negras.
+const SPOT_DARKNESS: f32 = 0.8;
 /// Brillo del contorno del disco: 0 no brilla.
 const RIM_GLOW: f32 = 0.85;
 /// Ancho del contorno brillante: más alto lo hace más delgado.
@@ -44,7 +46,7 @@ fn heat(noise: &OpenSimplex, p: Vector3, time: f32) -> f32 {
     let spot_value = fbm(noise, p * SPOT_SCALE + warp * 0.25 + color(t * 0.2, 20.0, 0.0), 3);
     let spot = smoothstep(SPOT_THRESHOLD, SPOT_THRESHOLD + 0.10, spot_value);
 
-    raw * (1.0 - spot * 0.55)
+    raw * (1.0 - spot * SPOT_DARKNESS)
 }
 
 /// Rampa de color: rojo casi negro, rojo puro y rojo encendido.
@@ -52,11 +54,11 @@ fn heat_color(value: f32) -> Vector3 {
     let cold = color(0.13, 0.0, 0.012);
     let red = color(0.95, 0.005, 0.005);
     let orange = color(1.0, 0.09, 0.015);
-    let hot = color(1.0, 0.28, 0.10);
+    let hot = color(1.0, 0.46, 0.30);
 
-    let ramp = mix(cold, red, smoothstep(0.05, 0.42, value));
-    let ramp = mix(ramp, orange, smoothstep(0.50, 0.80, value));
-    mix(ramp, hot, smoothstep(0.86, 1.05, value))
+    let ramp = mix(cold, red, smoothstep(0.12, 0.55, value));
+    let ramp = mix(ramp, orange, smoothstep(0.55, 0.70, value));
+    mix(ramp, hot, smoothstep(0.68, 0.80, value))
 }
 
 pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
