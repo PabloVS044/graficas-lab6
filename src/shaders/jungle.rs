@@ -93,7 +93,7 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
 
     // Las nubes reciben la misma luz que la superficie que tapan.
     let cloud = cloud_density(noise, p, uniforms.time, CLOUD_COVERAGE) * CLOUD_OPACITY;
-    let lit = mix(surface, color(0.86, 0.90, 0.87), cloud);
+    let lit = mix(surface, color(0.66, 0.70, 0.68), cloud);
 
     lit * (0.1 + fragment.intensity * 0.9)
 }
