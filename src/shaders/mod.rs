@@ -1,5 +1,6 @@
 mod jungle;
 pub mod noise_helpers;
+mod sun;
 
 use raylib::prelude::*;
 
@@ -36,6 +37,11 @@ impl Body {
     }
 }
 
+/// Atajo para escribir un color (o un desplazamiento) con tres componentes.
+pub fn color(r: f32, g: f32, b: f32) -> Vector3 {
+    Vector3::new(r, g, b)
+}
+
 /// Interpolación lineal entre dos colores.
 pub fn mix(a: Vector3, b: Vector3, amount: f32) -> Vector3 {
     a * (1.0 - amount) + b * amount
@@ -51,8 +57,9 @@ pub fn smoothstep(start: f32, end: f32, value: f32) -> f32 {
 pub fn fragment_shader(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
     match uniforms.body {
         Body::Jungle => jungle::shade(fragment, uniforms),
-        // Pendientes: esfera gris hasta que tengan su shader.
-        Body::Toxic | Body::RedSun => {
+        Body::RedSun => sun::shade(fragment, uniforms),
+        // Pendiente: esfera gris hasta que tenga su shader.
+        Body::Toxic => {
             Vector3::new(0.75, 0.75, 0.75) * (0.12 + fragment.intensity * 0.88)
         }
     }

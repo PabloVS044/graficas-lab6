@@ -7,7 +7,7 @@ use noise::OpenSimplex;
 use raylib::prelude::*;
 
 use super::noise_helpers::{cell_random, fbm, sample};
-use super::{mix, smoothstep};
+use super::{color, mix, smoothstep};
 use crate::Uniforms;
 use crate::fragment::Fragment;
 
@@ -66,10 +66,6 @@ const CAMPFIRE_BRIGHTNESS: f32 = 1.7;
 const CLOUD_LIGHT_BLOCK: f32 = 0.8;
 /// Cuánto oscurece la sombra: 0 no se ve, 1 deja el suelo negro.
 const SHADOW_STRENGTH: f32 = 0.72;
-
-fn color(r: f32, g: f32, b: f32) -> Vector3 {
-    Vector3::new(r, g, b)
-}
 
 /// Densidad de nubes en un punto de la esfera, de 0 (cielo) a 1 (nube).
 ///
