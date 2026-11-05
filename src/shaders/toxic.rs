@@ -1,12 +1,11 @@
 //! Mundo tóxico: gigante gaseoso de atmósfera envenenada, con bandas de verde
 //! ácido, ceniza y lodo que fluyen como un líquido, y una tormenta que las curva.
-//! Entre el gas flotan los restos de lo que fue una ciudad: piezas de cemento gris
-//! agrietadas.
+//! Entre el gas flotan los restos de lo que fue una ciudad: piezas de cemento gris.
 
 use noise::OpenSimplex;
 use raylib::prelude::*;
 
-use super::noise_helpers::{cell_random, fbm};
+use super::noise_helpers::fbm;
 use super::{color, mix, smoothstep};
 use crate::Uniforms;
 use crate::fragment::Fragment;
@@ -33,12 +32,6 @@ const RUIN_SCALE: f32 = 2.5;
 const RUIN_THRESHOLD: f32 = 0.55;
 /// Cuánto se rompe el borde de los restos.
 const RUIN_BREAKUP: f32 = 0.22;
-/// Tamaño de las piezas de cemento: más alto da piezas más pequeñas y numerosas.
-const SHARD_SCALE: f32 = 13.0;
-/// Ancho de las grietas entre piezas.
-const CRACK_WIDTH: f32 = 0.09;
-/// Fracción de piezas que siguen en su lugar.
-const SHARD_SURVIVAL: f32 = 0.85;
 /// Fuerza del brillo tóxico en la orilla de los restos: 0 lo apaga.
 const SHORE_GLOW: f32 = 0.35;
 
@@ -70,67 +63,13 @@ fn ruin_mask(noise: &OpenSimplex, p: Vector3) -> (f32, f32) {
     )
 }
 
-/// Datos de la pieza de cemento más cercana a un punto (ruido celular).
-struct Shard {
-    /// Distancia hasta la grieta que la separa de su vecina: 0 sobre la grieta.
-    to_crack: f32,
-    /// Celda de la pieza. Sirve para darle un tono propio.
-    id: (i32, i32, i32),
-}
-
-/// Reparte un punto al azar en cada celda de una cuadrícula y busca los dos más
-/// cercanos. Cada punto es el centro de una pieza de forma irregular, y donde los
-/// dos más cercanos quedan a la misma distancia hay una grieta.
-fn nearest_shard(position: Vector3) -> Shard {
-    let (cx, cy, cz) = (
-        position.x.floor() as i32,
-        position.y.floor() as i32,
-        position.z.floor() as i32,
-    );
-    let mut nearest = f32::MAX;
-    let mut second = f32::MAX;
-    let mut id = (cx, cy, cz);
-
-    for x in cx - 1..=cx + 1 {
-        for y in cy - 1..=cy + 1 {
-            for z in cz - 1..=cz + 1 {
-                let cell = (x, y, z);
-                let dx = x as f32 + cell_random(cell, 40) - position.x;
-                let dy = y as f32 + cell_random(cell, 41) - position.y;
-                let dz = z as f32 + cell_random(cell, 42) - position.z;
-                let distance = (dx * dx + dy * dy + dz * dz).sqrt();
-
-                if distance < nearest {
-                    second = nearest;
-                    nearest = distance;
-                    id = cell;
-                } else if distance < second {
-                    second = distance;
-                }
-            }
-        }
-    }
-
-    Shard { to_crack: second - nearest, id }
-}
-
-/// Color de los restos: piezas de cemento gris de formas irregulares, cada una
-/// con su tono, separadas por grietas. Algunas faltan y dejan ver el hueco.
+/// Color de los restos: cemento gris de una sola pieza, gastado por manchas
+/// grandes y grano fino.
 fn ruin_color(noise: &OpenSimplex, p: Vector3) -> Vector3 {
-    let shard = nearest_shard(p * SHARD_SCALE);
-
-    // Tono propio de la pieza, con manchas finas para que parezca material gastado.
-    let tone = 0.26 + cell_random(shard.id, 43) * 0.30;
-    let stains = 0.78 + fbm(noise, p * 42.0, 2) * 0.42;
-    let cement = color(tone, tone * 0.98, tone * 0.93) * stains;
-
-    let gap = color(0.035, 0.035, 0.035);
-    let missing = cell_random(shard.id, 44) > SHARD_SURVIVAL;
-    if missing {
-        return gap;
-    }
-
-    mix(gap, cement, smoothstep(0.0, CRACK_WIDTH, shard.to_crack))
+    let wear = fbm(noise, p * 9.0 + color(5.0, 12.0, -7.0), 3);
+    let grain = fbm(noise, p * 46.0, 2);
+    let tone = 0.20 + smoothstep(0.30, 0.70, wear) * 0.26 + (grain - 0.5) * 0.14;
+    color(tone, tone * 0.98, tone * 0.93)
 }
 
 /// Desplazamiento de las bandas en un punto. Una capa de ruido distorsiona a la
@@ -223,14 +162,6 @@ mod tests {
         let p = point(700);
         assert_eq!(ruin_mask(&noise, p), ruin_mask(&noise, p));
         assert_ne!(band_value(&noise, p, 0.0), band_value(&noise, p, 30.0));
-    }
-
-    #[test]
-    fn shards_have_cracks_and_different_tones() {
-        let shards: Vec<Shard> = (0..2000).map(|i| nearest_shard(point(i) * SHARD_SCALE)).collect();
-        assert!(shards.iter().any(|shard| shard.to_crack < 0.05));
-        assert!(shards.iter().any(|shard| shard.to_crack > 0.3));
-        assert!(shards.iter().any(|shard| shard.id != shards[0].id));
     }
 
     #[test]
