@@ -47,12 +47,12 @@ fn heat(noise: &OpenSimplex, p: Vector3, time: f32) -> f32 {
     raw * (1.0 - spot * 0.55)
 }
 
-/// Rampa de color: rojo casi negro, carmesí, naranja y un poco de amarillo.
+/// Rampa de color: rojo casi negro, rojo puro y rojo encendido.
 fn heat_color(value: f32) -> Vector3 {
     let cold = color(0.13, 0.0, 0.012);
-    let red = color(0.78, 0.035, 0.015);
-    let orange = color(1.0, 0.34, 0.04);
-    let hot = color(1.0, 0.83, 0.48);
+    let red = color(0.95, 0.005, 0.005);
+    let orange = color(1.0, 0.09, 0.015);
+    let hot = color(1.0, 0.28, 0.10);
 
     let ramp = mix(cold, red, smoothstep(0.05, 0.42, value));
     let ramp = mix(ramp, orange, smoothstep(0.50, 0.80, value));
@@ -68,7 +68,7 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
     let view = (uniforms.camera_position - fragment.world_position).normalize();
     let facing = fragment.normal.dot(view).max(0.0);
     let rim = (1.0 - facing).powf(RIM_SHARPNESS) * RIM_GLOW;
-    mix(surface, color(1.0, 0.72, 0.25), rim)
+    mix(surface, color(1.0, 0.13, 0.04), rim)
 }
 
 #[cfg(test)]

@@ -210,7 +210,7 @@ fn ring_light(
     Some(band_color(across, angle, active.ring.phase, time) * active.fade * edge_on)
 }
 
-/// Aspecto de la banda: un borde exterior amarillo y franjas naranjas adentro,
+/// Aspecto de la banda: un borde exterior encendido y franjas rojas adentro,
 /// con pulsos de energía que recorren el anillo.
 fn band_color(across: f32, angle: f32, phase: f32, time: f32) -> Vector3 {
     let edge = smoothstep(0.72, 0.92, across) * (1.0 - smoothstep(0.92, 1.0, across));
@@ -220,9 +220,9 @@ fn band_color(across: f32, angle: f32, phase: f32, time: f32) -> Vector3 {
     let turn = phase * std::f32::consts::TAU;
     let pulse = 0.55 + 0.45 * (angle * 3.0 + turn + time * (0.5 + phase)).sin();
 
-    let hot = color(1.0, 0.78, 0.28);
-    let orange = color(1.0, 0.30, 0.03);
-    mix(orange * stripes * 0.8, hot, edge) * pulse
+    let hot = color(1.0, 0.11, 0.03);
+    let deep_red = color(0.85, 0.01, 0.005);
+    mix(deep_red * stripes * 0.8, hot, edge) * pulse
 }
 
 #[cfg(test)]
