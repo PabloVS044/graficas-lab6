@@ -10,6 +10,7 @@ mod vertex;
 use camera::OrbitCamera;
 use framebuffer::Framebuffer;
 use obj::Obj;
+use rayon::prelude::*;
 use raylib::prelude::*;
 use vertex::Vertex;
 
@@ -53,6 +54,8 @@ impl Uniforms {
     }
 }
 
+/// Mismo orden que en clase, pero separando la prueba de profundidad del
+/// sombreado. Así los shaders corren en paralelo: uno por núcleo del CPU.
 fn render(framebuffer: &mut Framebuffer, vertices: &[Vertex], uniforms: &Uniforms) {
     framebuffer.clear();
 
@@ -61,16 +64,29 @@ fn render(framebuffer: &mut Framebuffer, vertices: &[Vertex], uniforms: &Uniform
         .map(|vertex| pipeline::vertex_shader(vertex, uniforms))
         .collect();
 
-    for triangle_vertices in transformed.chunks_exact(3) {
-        for fragment in triangle::triangle(triangle_vertices, uniforms) {
-            let index =
-                fragment.position.y as usize * framebuffer.width + fragment.position.x as usize;
+    let fragments: Vec<_> = transformed
+        .par_chunks_exact(3)
+        .flat_map_iter(|triangle_vertices| triangle::triangle(triangle_vertices, uniforms))
+        .collect();
 
-            if fragment.depth < framebuffer.depths[index] {
-                framebuffer.depths[index] = fragment.depth;
-                framebuffer.colors[index] = shaders::fragment_shader(&fragment, uniforms);
-            }
+    let mut visible = Vec::with_capacity(fragments.len());
+    for fragment in fragments {
+        let index =
+            fragment.position.y as usize * framebuffer.width + fragment.position.x as usize;
+
+        if fragment.depth < framebuffer.depths[index] {
+            framebuffer.depths[index] = fragment.depth;
+            visible.push((index, fragment));
         }
+    }
+
+    let shaded: Vec<_> = visible
+        .par_iter()
+        .map(|(index, fragment)| (*index, shaders::fragment_shader(fragment, uniforms)))
+        .collect();
+
+    for (index, color) in shaded {
+        framebuffer.colors[index] = color;
     }
 }
 
