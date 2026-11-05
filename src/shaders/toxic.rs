@@ -46,7 +46,13 @@ const NIGHT_SECOND_BLINK_LENGTH: f32 = 0.5;
 /// Cuánto se mueve el iris del ojo tenebroso para seguir a la cámara.
 const NIGHT_GAZE_REACH: f32 = 0.11;
 /// Luz propia del ojo bonito: lo mantiene visible cerca del borde de la sombra.
-const DAY_EYE_GLOW: f32 = 0.22;
+const DAY_EYE_GLOW: f32 = 0.10;
+/// Cuánto deforma el gas la forma del ojo: 0 lo deja como un dibujo limpio.
+const EYE_WARP: f32 = 0.26;
+/// Ancho del borde de los párpados: más alto hace que se disuelvan más en el gas.
+const EYE_EDGE_SOFTNESS: f32 = 0.04;
+/// Cuánto se transparenta la atmósfera a través del ojo: 0 lo vuelve sólido.
+const EYE_ATMOSPHERE_BLEND: f32 = 0.38;
 /// Fuerza del resplandor rojo alrededor del ojo tenebroso.
 const NIGHT_HALO: f32 = 0.14;
 
@@ -96,10 +102,11 @@ fn eye_shape(u: f32, v: f32, open: f32) -> EyeShape {
     let across = (u / EYE_WIDTH).abs();
     let height = EYE_HEIGHT * (1.0 - across * across).max(0.0);
 
-    // Ancho del contorno suave, para que el borde no se vea dentado.
-    let soft = 0.006;
-    let edge = |limit: f32| 1.0 - smoothstep(limit - soft, limit + soft, v.abs());
-    let inside = if across < 1.0 { 1.0 } else { 0.0 };
+    let edge = |limit: f32| {
+        1.0 - smoothstep(limit - EYE_EDGE_SOFTNESS, limit + EYE_EDGE_SOFTNESS, v.abs())
+    };
+    // Las puntas se desvanecen en vez de terminar en un corte.
+    let inside = 1.0 - smoothstep(0.82, 1.08, across);
 
     EyeShape {
         opening: edge(height * open) * inside * smoothstep(0.0, 0.12, open),
@@ -108,12 +115,18 @@ fn eye_shape(u: f32, v: f32, open: f32) -> EyeShape {
     }
 }
 
-/// Ojo del lado iluminado: esclerótica limpia, iris esmeralda con fibras, pupila
-/// redonda y un brillo. Mira un poco a los lados. Devuelve el color y su máscara.
-fn day_eye(u: f32, v: f32, time: f32) -> (Vector3, f32) {
+/// Ojo del lado iluminado: iris esmeralda con fibras y pupila redonda, sobre una
+/// esclerótica que sale del mismo color de la atmósfera. Mira un poco a los lados.
+/// Devuelve el color de la superficie y la parte visible del globo.
+fn day_eye(u: f32, v: f32, time: f32, atmosphere: Vector3) -> (Vector3, f32) {
     let shape = eye_shape(u, v, blink(time, DAY_BLINK_PERIOD, DAY_BLINK_LENGTH));
-    if shape.socket <= 0.0 {
-        return (Vector3::zero(), 0.0);
+
+    // La atmósfera se oscurece alrededor y baja hasta cubrir el ojo cerrado.
+    let surroundings = atmosphere * (1.0 - shape.socket * 0.6);
+    let eyelid = atmosphere * (0.45 + smoothstep(0.0, 0.07, v.abs()) * 0.35);
+    let closed = mix(surroundings, eyelid, shape.almond);
+    if shape.opening <= 0.0 {
+        return (closed, 0.0);
     }
 
     let du = u - (time * 0.31).sin() * 0.035;
@@ -122,29 +135,29 @@ fn day_eye(u: f32, v: f32, time: f32) -> (Vector3, f32) {
     let angle = dv.atan2(du);
 
     let fibers = (angle * 22.0).sin() * 0.5 + (angle * 37.0 + 2.0).sin() * 0.5;
-    let iris = mix(color(0.10, 0.86, 0.62), color(0.02, 0.26, 0.38), smoothstep(0.35, 1.0, radius));
-    let iris = iris * (0.85 + fibers * 0.18);
-    let iris = iris * (1.0 - smoothstep(0.82, 1.0, radius) * 0.75);
+    let iris = mix(color(0.10, 0.80, 0.55), color(0.03, 0.26, 0.26), smoothstep(0.35, 1.0, radius));
+    let iris = iris * (0.85 + fibers * 0.15);
+    let iris = iris * (1.0 - smoothstep(0.78, 1.05, radius) * 0.7);
 
-    let sclera = color(0.93, 0.97, 0.90) * (1.0 - (v.abs() / EYE_HEIGHT) * 0.28);
-    let globe = mix(iris, sclera, smoothstep(0.97, 1.03, radius));
-    let globe = mix(color(0.0, 0.02, 0.03), globe, smoothstep(0.34, 0.42, radius));
+    // Esclerótica: gas pálido, no blanco. Conserva las bandas que pasan por detrás.
+    let pale = color(0.76, 0.86, 0.58) * (1.0 - (v.abs() / EYE_HEIGHT) * 0.35);
+    let sclera = mix(pale, atmosphere, 0.25);
+    let globe = mix(iris, sclera, smoothstep(0.92, 1.12, radius));
+    let globe = mix(color(0.01, 0.03, 0.03), globe, smoothstep(0.30, 0.46, radius));
 
-    // Brillo: un punto blanco fijo sobre el iris.
+    // Brillo difuso sobre el iris.
     let (hu, hv) = (du + IRIS_RADIUS * 0.34, dv - IRIS_RADIUS * 0.36);
-    let glint = 1.0 - smoothstep(0.012, 0.022, (hu * hu + hv * hv).sqrt());
-    let globe = mix(globe, color(1.0, 1.0, 1.0), glint);
+    let glint = (1.0 - smoothstep(0.004, 0.032, (hu * hu + hv * hv).sqrt())) * 0.7;
+    let globe = mix(globe, color(0.92, 0.98, 0.86), glint);
 
-    // Párpado cerrado: un tono apenas más claro que la pared de la tormenta.
-    // Se oscurece hacia el centro, donde se juntan las pestañas.
-    let eyelid = color(0.17, 0.30, 0.13) * smoothstep(0.0, 0.05, v.abs()).max(0.12);
-    let lidded = mix(mix(color(0.02, 0.035, 0.015), eyelid, shape.almond), globe, shape.opening);
-    (lidded, shape.socket.max(shape.almond))
+    let globe = mix(globe, atmosphere, EYE_ATMOSPHERE_BLEND * smoothstep(0.5, 1.2, radius));
+    (mix(closed, globe, shape.opening), shape.opening)
 }
 
-/// Ojo del lado oscuro: esclerótica enferma con venas, iris rojo encendido y
-/// pupila de reptil que sigue a la cámara. Parpadea lento y a destiempo. Tiene luz
-/// propia. Devuelve su luz, y cuánto tapa lo que hay debajo.
+/// Ojo del lado oscuro: iris rojo encendido con pupila de reptil que sigue a la
+/// cámara, sobre gas enfermo atravesado por hilos rojos. Parpadea lento y a
+/// destiempo, y al cerrarse solo queda un resplandor. Devuelve el color de la
+/// superficie y su luz propia.
 fn night_eye(
     noise: &OpenSimplex,
     p: Vector3,
@@ -152,17 +165,21 @@ fn night_eye(
     v: f32,
     gaze: (f32, f32),
     time: f32,
-) -> (Vector3, f32) {
+    atmosphere: Vector3,
+) -> (Vector3, Vector3) {
     let open = blink(time, NIGHT_BLINK_PERIOD, NIGHT_BLINK_LENGTH)
         .min(blink(time, NIGHT_SECOND_BLINK_PERIOD, NIGHT_SECOND_BLINK_LENGTH));
     let shape = eye_shape(u, v, open);
 
     // Resplandor: se extiende más allá de la cuenca y se ve aun con el ojo cerrado.
-    let halo_distance = (u * u + v * v).sqrt();
-    let halo = (1.0 - smoothstep(0.08, 0.50, halo_distance)) * NIGHT_HALO * (0.35 + open * 0.65);
-    let halo = color(1.0, 0.04, 0.02) * halo;
-    if shape.socket <= 0.0 {
-        return (halo, 0.0);
+    let reach = (u * u + v * v).sqrt();
+    let halo = (1.0 - smoothstep(0.06, 0.55, reach)) * NIGHT_HALO * (0.35 + open * 0.65);
+    let halo = color(1.0, 0.05, 0.02) * halo;
+
+    let surface = atmosphere * (1.0 - shape.socket * 0.7);
+    let surface = surface * (1.0 - shape.opening * (1.0 - EYE_ATMOSPHERE_BLEND));
+    if shape.opening <= 0.0 {
+        return (surface, halo);
     }
 
     let du = u - gaze.0 * NIGHT_GAZE_REACH;
@@ -170,23 +187,25 @@ fn night_eye(
     let radius = (du * du + dv * dv).sqrt() / IRIS_RADIUS;
     let angle = dv.atan2(du);
 
-    // Venas: donde el ruido cruza por 0 se forman líneas que se ramifican.
-    let vein = 1.0 - smoothstep(0.012, 0.05, sample(noise, p * 24.0).abs());
-    let sclera = mix(color(0.24, 0.10, 0.05), color(0.80, 0.03, 0.02), vein);
+    // Hilos: donde el ruido cruza por 0 se forman líneas, deformadas por el gas.
+    let thread = sample(noise, p * 15.0 + color(u, v, 0.0) * 6.0 + color(time * 0.05, 0.0, 0.0)).abs();
+    let vein = 1.0 - smoothstep(0.015, 0.10, thread);
+    // La atmósfera aquí es luz propia en el lado oscuro: sin atenuarla se vería de día.
+    let sclera = mix(atmosphere * 0.16 + color(0.07, 0.012, 0.01), color(0.62, 0.035, 0.02), vein * 0.8);
 
     let fibers = (angle * 26.0).sin() * 0.5 + 0.5;
-    let iris = mix(color(1.0, 0.13, 0.03), color(0.32, 0.0, 0.015), smoothstep(0.2, 1.0, radius));
-    let iris = iris * (0.75 + fibers * 0.35);
-    let globe = mix(iris, sclera, smoothstep(0.96, 1.04, radius));
+    let iris = mix(color(1.0, 0.13, 0.03), color(0.30, 0.0, 0.015), smoothstep(0.2, 1.0, radius));
+    let iris = iris * (0.78 + fibers * 0.30);
+    let globe = mix(iris, sclera, smoothstep(0.90, 1.14, radius));
 
     // Pupila vertical: se angosta hacia arriba y hacia abajo. Late despacio.
-    let width = IRIS_RADIUS * (0.15 + (time * 1.3).sin() * 0.04);
-    let along = (dv / (IRIS_RADIUS * 0.92)).abs();
+    let width = IRIS_RADIUS * (0.17 + (time * 1.3).sin() * 0.04);
+    let along = (dv / (IRIS_RADIUS * 0.95)).abs();
     let slit = du.abs() - width * (1.0 - along * along).max(0.0);
-    let globe = mix(globe, color(0.0, 0.0, 0.0), (1.0 - smoothstep(-0.002, 0.004, slit)) * (1.0 - smoothstep(0.98, 1.02, along)));
+    let pupil = (1.0 - smoothstep(-0.004, 0.012, slit)) * (1.0 - smoothstep(0.95, 1.05, along));
+    let globe = mix(globe, color(0.0, 0.0, 0.0), pupil);
 
-    let lit = mix(color(0.015, 0.0, 0.0), globe, shape.opening);
-    (lit * shape.almond + halo, shape.socket.max(shape.almond))
+    (surface, globe * shape.opening + halo)
 }
 
 /// Desplazamiento de las bandas en un punto. Una capa de ruido distorsiona a la
@@ -222,6 +241,21 @@ fn band_color(value: f32) -> Vector3 {
     mix(ramp, sick, smoothstep(0.74, 0.97, value))
 }
 
+/// Coordenadas del punto en el plano del ojo, empujadas por un ruido que se mueve
+/// con la atmósfera. El gas deforma al ojo, y por eso no parece pegado encima.
+fn warped_coordinates(
+    noise: &OpenSimplex,
+    p: Vector3,
+    right: Vector3,
+    up: Vector3,
+    time: f32,
+) -> (f32, f32) {
+    let t = time * FLOW_SPEED * 2.0;
+    let push_u = fbm(noise, p * 5.0 + color(t, 9.0, 2.0), 2) - 0.5;
+    let push_v = fbm(noise, p * 5.0 + color(-4.0, t, 16.0), 2) - 0.5;
+    (p.dot(right) + push_u * EYE_WARP, p.dot(up) + push_v * EYE_WARP)
+}
+
 pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
     let noise = &uniforms.noise;
     let time = uniforms.time;
@@ -242,9 +276,10 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
 
     if p.dot(day_center) > 0.5 {
         let (right, up) = eye_axes(day_center);
-        let (eye, mask) = day_eye(p.dot(right), p.dot(up), time);
-        surface = mix(surface, eye, mask);
-        emission += eye * mask * DAY_EYE_GLOW;
+        let (u, v) = warped_coordinates(noise, p, right, up, time);
+        let (eyed, visible) = day_eye(u, v, time, surface);
+        surface = eyed;
+        emission += eyed * visible * DAY_EYE_GLOW;
     }
 
     if p.dot(night_center) > 0.5 {
@@ -252,8 +287,9 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
         // Dirección hacia la cámara en el plano del ojo: el iris se corre hacia ahí.
         let to_camera = (uniforms.camera_position - night_center).normalize();
         let gaze = (to_camera.dot(right), to_camera.dot(up));
-        let (light, mask) = night_eye(noise, p, p.dot(right), p.dot(up), gaze, time);
-        surface = surface * (1.0 - mask);
+        let (u, v) = warped_coordinates(noise, p, right, up, time);
+        let (eyed, light) = night_eye(noise, p, u, v, gaze, time, surface);
+        surface = eyed;
         emission += light;
     }
 
