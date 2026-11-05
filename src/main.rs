@@ -4,6 +4,7 @@ mod fragment;
 mod framebuffer;
 mod obj;
 mod pipeline;
+mod rings;
 mod shaders;
 mod triangle;
 mod vertex;
@@ -15,6 +16,7 @@ use noise::OpenSimplex;
 use obj::Obj;
 use rayon::prelude::*;
 use raylib::prelude::*;
+use rings::Rings;
 use shaders::Body;
 use vertex::Vertex;
 
@@ -71,6 +73,7 @@ impl Uniforms {
 fn render(
     framebuffer: &mut Framebuffer,
     background: &Background,
+    rings: &Rings,
     vertices: &[Vertex],
     uniforms: &Uniforms,
 ) {
@@ -105,6 +108,10 @@ fn render(
     for (index, color) in shaded {
         framebuffer.colors[index] = color;
     }
+
+    if uniforms.body == Body::RedSun {
+        rings.paint(framebuffer, uniforms);
+    }
 }
 
 fn main() {
@@ -112,16 +119,17 @@ fn main() {
     let vertices = model.vertex_array();
     let noise = OpenSimplex::new(NOISE_SEED);
     let background = Background::new(&noise);
+    let rings = Rings::new();
 
     let args: Vec<String> = std::env::args().collect();
     let has_flag = |flag: &str| args.iter().any(|arg| arg == flag);
 
     if has_flag("--export-images") {
-        export_images(&background, &vertices, &noise);
+        export_images(&background, &rings, &vertices, &noise);
         return;
     }
     if has_flag("--benchmark") {
-        benchmark(&background, &vertices, &noise);
+        benchmark(&background, &rings, &vertices, &noise);
         return;
     }
 
@@ -150,7 +158,7 @@ fn main() {
         camera.update(&window, window.get_frame_time());
 
         let uniforms = Uniforms::new(&camera, window.get_time() as f32, &noise, body);
-        render(&mut framebuffer, &background, &vertices, &uniforms);
+        render(&mut framebuffer, &background, &rings, &vertices, &uniforms);
         framebuffer.upload();
 
         let mut drawing = window.begin_drawing(&thread);
@@ -168,19 +176,19 @@ fn main() {
 }
 
 /// Guarda una captura de cada cuerpo en `docs/`, sin abrir la ventana.
-fn export_images(background: &Background, vertices: &[Vertex], noise: &OpenSimplex) {
+fn export_images(background: &Background, rings: &Rings, vertices: &[Vertex], noise: &OpenSimplex) {
     std::fs::create_dir_all(CAPTURES_PATH).expect("No se pudo crear la carpeta de capturas");
 
     let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT);
     for body in Body::ALL {
         let uniforms = Uniforms::new(&OrbitCamera::new(), 0.0, noise, body);
-        render(&mut framebuffer, background, vertices, &uniforms);
+        render(&mut framebuffer, background, rings, vertices, &uniforms);
         framebuffer.export(&format!("{CAPTURES_PATH}/{}.png", body.file_name()));
     }
 }
 
 /// Mide cuánto tarda un cuadro de cada cuerpo, sin abrir la ventana.
-fn benchmark(background: &Background, vertices: &[Vertex], noise: &OpenSimplex) {
+fn benchmark(background: &Background, rings: &Rings, vertices: &[Vertex], noise: &OpenSimplex) {
     const FRAMES: u32 = 60;
     let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT);
 
@@ -188,7 +196,7 @@ fn benchmark(background: &Background, vertices: &[Vertex], noise: &OpenSimplex) 
         let start = std::time::Instant::now();
         for frame in 0..FRAMES {
             let uniforms = Uniforms::new(&OrbitCamera::new(), frame as f32 / 60.0, noise, body);
-            render(&mut framebuffer, background, vertices, &uniforms);
+            render(&mut framebuffer, background, rings, vertices, &uniforms);
         }
         let milliseconds = start.elapsed().as_secs_f32() * 1000.0 / FRAMES as f32;
         println!("{}: {milliseconds:.1} ms por cuadro", body.title());
@@ -206,6 +214,7 @@ mod tests {
         let vertices = Obj::load(MODEL_PATH).unwrap().vertex_array();
         let noise = OpenSimplex::new(NOISE_SEED);
         let background = Background::new(&noise);
+        let rings = Rings::new();
         let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT);
 
         for step in 0..200 {
@@ -215,7 +224,7 @@ mod tests {
                 distance: 2.0 + (step % 5) as f32 * 0.5,
             };
             let uniforms = Uniforms::new(&camera, 0.0, &noise, Body::Toxic);
-            render(&mut framebuffer, &background, &vertices, &uniforms);
+            render(&mut framebuffer, &background, &rings, &vertices, &uniforms);
 
             for row in framebuffer.depths.chunks_exact(WIDTH) {
                 let covered = |depth: &f32| depth.is_finite();
