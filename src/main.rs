@@ -37,7 +37,6 @@ pub struct Uniforms {
     pub rays: CameraRays,
     /// Dirección normalizada que va del planeta hacia la luz.
     pub light_direction: Vector3,
-    #[allow(dead_code)] // Lo usarán los shaders animados.
     pub time: f32,
     pub noise: OpenSimplex,
     pub body: Body,

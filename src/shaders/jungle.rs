@@ -1,6 +1,7 @@
-//! Planeta rocoso cubierto de selva. Por ahora solo decide las regiones de la
-//! superficie: mar, costa, selva, ríos y mesetas de roca.
+//! Planeta rocoso cubierto de selva: mar, costa, selva, ríos y mesetas de roca,
+//! con una capa de nubes que se mueve por su cuenta.
 
+use noise::OpenSimplex;
 use raylib::prelude::*;
 
 use super::noise_helpers::{fbm, sample};
@@ -20,9 +21,36 @@ const CANOPY_SCALE: f32 = 26.0;
 const RIVER_SCALE: f32 = 5.0;
 /// Grosor de los ríos.
 const RIVER_WIDTH: f32 = 0.012;
+/// Parte del cielo cubierta por nubes: 0 despejado, 1 casi todo cubierto.
+const CLOUD_COVERAGE: f32 = 0.42;
+/// Tamaño de las nubes: más alto da nubes más pequeñas.
+const CLOUD_SCALE: f32 = 3.4;
+/// Radianes por segundo que giran las nubes. El terreno no se mueve.
+const CLOUD_SPEED: f32 = 0.06;
+/// Borde de las nubes: más alto da bordes más difusos.
+const CLOUD_SOFTNESS: f32 = 0.07;
+/// Opacidad de la parte más densa de una nube.
+const CLOUD_OPACITY: f32 = 0.92;
 
 fn color(r: f32, g: f32, b: f32) -> Vector3 {
     Vector3::new(r, g, b)
+}
+
+/// Densidad de nubes en un punto de la esfera, de 0 (cielo) a 1 (nube).
+///
+/// Las nubes giran alrededor del eje `y` en vez de desplazarse, para que no se
+/// deformen en los polos. Una segunda capa de ruido distorsiona a la primera y
+/// les da forma de jirones.
+fn cloud_density(noise: &OpenSimplex, p: Vector3, time: f32, coverage: f32) -> f32 {
+    let (sin, cos) = (time * CLOUD_SPEED).sin_cos();
+    let moved = color(p.x * cos + p.z * sin, p.y, p.z * cos - p.x * sin);
+
+    let warp = fbm(noise, moved * 2.6 + color(31.0, 17.0, 5.0), 3) - 0.5;
+    let shape = fbm(noise, moved * CLOUD_SCALE + color(warp, -warp, warp) * 2.2, 5);
+
+    // Más cobertura baja el umbral: más valores del ruido cuentan como nube.
+    let threshold = 0.70 - coverage * 0.40;
+    smoothstep(threshold - CLOUD_SOFTNESS, threshold + CLOUD_SOFTNESS, shape)
 }
 
 pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
@@ -61,5 +89,46 @@ pub fn shade(fragment: &Fragment, uniforms: &Uniforms) -> Vector3 {
     let highland = smoothstep(HIGHLAND_LEVEL - 0.015, HIGHLAND_LEVEL + 0.015, height);
     let ground = mix(jungle, rock, highland);
 
-    mix(sea, ground, land) * (0.1 + fragment.intensity * 0.9)
+    let surface = mix(sea, ground, land);
+
+    // Las nubes reciben la misma luz que la superficie que tapan.
+    let cloud = cloud_density(noise, p, uniforms.time, CLOUD_COVERAGE) * CLOUD_OPACITY;
+    let lit = mix(surface, color(0.86, 0.90, 0.87), cloud);
+
+    lit * (0.1 + fragment.intensity * 0.9)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Promedia la densidad sobre varios puntos de la esfera.
+    fn average_density(time: f32, coverage: f32) -> f32 {
+        let noise = OpenSimplex::new(7);
+        let mut total = 0.0;
+        for i in 0..2000 {
+            let angle = i as f32 * 2.4;
+            let y = 1.0 - i as f32 / 1000.0;
+            let r = (1.0 - y * y).max(0.0).sqrt();
+            let p = color(r * angle.cos(), y, r * angle.sin());
+            total += cloud_density(&noise, p, time, coverage);
+        }
+        total / 2000.0
+    }
+
+    #[test]
+    fn more_coverage_means_more_clouds() {
+        assert!(average_density(0.0, 0.2) < average_density(0.0, 0.8));
+    }
+
+    #[test]
+    fn clouds_move_with_time() {
+        let noise = OpenSimplex::new(7);
+        let p = color(0.6, 0.2, 0.77);
+        let moved = (0..50).any(|i| {
+            let time = i as f32;
+            (cloud_density(&noise, p, time, 0.5) - cloud_density(&noise, p, 0.0, 0.5)).abs() > 0.2
+        });
+        assert!(moved);
+    }
 }
