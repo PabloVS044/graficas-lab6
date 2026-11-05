@@ -1,5 +1,6 @@
 mod background;
 mod camera;
+mod capture;
 mod fragment;
 mod framebuffer;
 mod obj;
@@ -25,7 +26,6 @@ const HEIGHT: usize = 600;
 const MODEL_PATH: &str = "sphere.obj";
 const FIELD_OF_VIEW: f32 = 45.0;
 const NOISE_SEED: u32 = 7;
-const CAPTURES_PATH: &str = "docs";
 
 /// Valores que no cambian entre los vértices y fragmentos de un mismo cuadro.
 pub struct Uniforms {
@@ -125,7 +125,11 @@ fn main() {
     let has_flag = |flag: &str| args.iter().any(|arg| arg == flag);
 
     if has_flag("--export-images") {
-        export_images(&background, &rings, &vertices, &noise);
+        capture::export_images(&background, &rings, &vertices, &noise);
+        return;
+    }
+    if has_flag("--export-clips") {
+        capture::export_clips(&background, &rings, &vertices, &noise);
         return;
     }
     if has_flag("--benchmark") {
@@ -172,18 +176,6 @@ fn main() {
             16,
             Color::LIGHTGRAY,
         );
-    }
-}
-
-/// Guarda una captura de cada cuerpo en `docs/`, sin abrir la ventana.
-fn export_images(background: &Background, rings: &Rings, vertices: &[Vertex], noise: &OpenSimplex) {
-    std::fs::create_dir_all(CAPTURES_PATH).expect("No se pudo crear la carpeta de capturas");
-
-    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT);
-    for body in Body::ALL {
-        let uniforms = Uniforms::new(&OrbitCamera::new(), 0.0, noise, body);
-        render(&mut framebuffer, background, rings, vertices, &uniforms);
-        framebuffer.export(&format!("{CAPTURES_PATH}/{}.png", body.file_name()));
     }
 }
 
