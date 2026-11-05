@@ -13,17 +13,17 @@ use crate::shaders::noise_helpers::cell_random;
 use crate::shaders::{color, mix, smoothstep};
 
 /// Cantidad de anillos: más da un sol más cargado y un poco más lento.
-const RING_COUNT: usize = 26;
+const RING_COUNT: usize = 12;
 /// Radio con el que nace un anillo, todavía oculto dentro del sol.
 const START_RADIUS: f32 = 0.80;
 /// Radio con el que termina de apagarse.
-const END_RADIUS: f32 = 1.5;
+const END_RADIUS: f32 = 1.22;
 /// Ancho de un anillo.
-const RING_WIDTH: f32 = 0.085;
+const RING_WIDTH: f32 = 0.15;
 /// Vueltas por segundo del ciclo de nacer y apagarse.
 const EXPANSION_SPEED: f32 = 0.055;
 /// Brillo general: 0 apaga los anillos.
-const RING_BRIGHTNESS: f32 = 1.0;
+const RING_BRIGHTNESS: f32 = 1.7;
 /// Brillo de los anillos que pasan por delante del disco, para que no se vean
 /// como rayas sobre la superficie: 1 los deja igual que los de afuera.
 const OVER_SUN_BRIGHTNESS: f32 = 0.3;
@@ -222,7 +222,7 @@ fn band_color(across: f32, angle: f32, phase: f32, time: f32) -> Vector3 {
 
     let hot = color(1.0, 0.78, 0.28);
     let orange = color(1.0, 0.30, 0.03);
-    mix(orange * stripes * 0.35, hot, edge) * pulse
+    mix(orange * stripes * 0.8, hot, edge) * pulse
 }
 
 #[cfg(test)]
