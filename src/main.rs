@@ -1,3 +1,151 @@
+mod camera;
+mod fragment;
+mod framebuffer;
+mod obj;
+mod pipeline;
+mod shaders;
+mod triangle;
+mod vertex;
+
+use camera::OrbitCamera;
+use framebuffer::Framebuffer;
+use obj::Obj;
+use raylib::prelude::*;
+use vertex::Vertex;
+
+const WIDTH: usize = 800;
+const HEIGHT: usize = 600;
+const MODEL_PATH: &str = "sphere.obj";
+const FIELD_OF_VIEW: f64 = 45.0;
+const BACKGROUND: Vector3 = Vector3 { x: 0.02, y: 0.02, z: 0.05 };
+
+/// Valores que no cambian entre los vértices y fragmentos de un mismo cuadro.
+pub struct Uniforms {
+    pub model: Matrix,
+    pub view: Matrix,
+    pub projection: Matrix,
+    pub width: usize,
+    pub height: usize,
+    pub camera_position: Vector3,
+    /// Dirección normalizada que va del planeta hacia la luz.
+    pub light_direction: Vector3,
+    #[allow(dead_code)] // Lo usarán los shaders animados.
+    pub time: f32,
+}
+
+impl Uniforms {
+    fn new(camera: &OrbitCamera, time: f32) -> Self {
+        Uniforms {
+            model: Matrix::identity(),
+            view: camera.view_matrix(),
+            projection: Matrix::perspective(
+                FIELD_OF_VIEW.to_radians(),
+                WIDTH as f64 / HEIGHT as f64,
+                0.1,
+                100.0,
+            ),
+            width: WIDTH,
+            height: HEIGHT,
+            camera_position: camera.position(),
+            light_direction: Vector3::new(0.6, 0.5, 0.7).normalize(),
+            time,
+        }
+    }
+}
+
+fn render(framebuffer: &mut Framebuffer, vertices: &[Vertex], uniforms: &Uniforms) {
+    framebuffer.clear();
+
+    let transformed: Vec<_> = vertices
+        .iter()
+        .map(|vertex| pipeline::vertex_shader(vertex, uniforms))
+        .collect();
+
+    for triangle_vertices in transformed.chunks_exact(3) {
+        for fragment in triangle::triangle(triangle_vertices, uniforms) {
+            let index =
+                fragment.position.y as usize * framebuffer.width + fragment.position.x as usize;
+
+            if fragment.depth < framebuffer.depths[index] {
+                framebuffer.depths[index] = fragment.depth;
+                framebuffer.colors[index] = shaders::fragment_shader(&fragment, uniforms);
+            }
+        }
+    }
+}
+
 fn main() {
-    println!("Hello, world!");
+    let model = Obj::load(MODEL_PATH).unwrap_or_else(|err| panic!("{err}"));
+    let vertices = model.vertex_array();
+
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(flag) = args.iter().position(|arg| arg == "--export-image") {
+        let path = args.get(flag + 1).expect("Uso: --export-image <archivo.png>");
+        export_image(&vertices, path);
+        return;
+    }
+
+    let (mut window, thread) = raylib::init()
+        .size(WIDTH as i32, HEIGHT as i32)
+        .title("Lab 6: Planetas y estrellas con shaders")
+        .build();
+    window.set_target_fps(60);
+
+    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, BACKGROUND);
+    framebuffer.init_texture(&mut window, &thread);
+
+    let mut camera = OrbitCamera::new();
+
+    while !window.window_should_close() {
+        camera.update(&window, window.get_frame_time());
+
+        let uniforms = Uniforms::new(&camera, window.get_time() as f32);
+        render(&mut framebuffer, &vertices, &uniforms);
+        framebuffer.upload();
+
+        let mut drawing = window.begin_drawing(&thread);
+        framebuffer.draw(&mut drawing);
+        drawing.draw_fps(10, 10);
+        drawing.draw_text("Flechas: orbitar   Rueda: zoom   Inicio: reiniciar", 10, 575, 16, Color::LIGHTGRAY);
+    }
+}
+
+/// Guarda un cuadro como PNG, sin abrir la ventana.
+fn export_image(vertices: &[Vertex], path: &str) {
+    let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, BACKGROUND);
+    let uniforms = Uniforms::new(&OrbitCamera::new(), 0.0);
+
+    render(&mut framebuffer, vertices, &uniforms);
+    framebuffer.export(path);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// La esfera es convexa: en cada fila, los píxeles entre el primero y el
+    /// último que la cubren también deben estar cubiertos.
+    #[test]
+    fn sphere_has_no_holes_from_any_angle() {
+        let vertices = Obj::load(MODEL_PATH).unwrap().vertex_array();
+        let mut framebuffer = Framebuffer::new(WIDTH, HEIGHT, BACKGROUND);
+
+        for step in 0..200 {
+            let camera = OrbitCamera {
+                yaw: step as f32 * 0.137,
+                pitch: (step as f32 * 0.31).sin() * 1.4,
+                distance: 2.0 + (step % 5) as f32 * 0.5,
+            };
+            render(&mut framebuffer, &vertices, &Uniforms::new(&camera, 0.0));
+
+            for row in framebuffer.depths.chunks_exact(WIDTH) {
+                let covered = |depth: &f32| depth.is_finite();
+                if let (Some(first), Some(last)) =
+                    (row.iter().position(covered), row.iter().rposition(covered))
+                {
+                    assert!(row[first..=last].iter().all(covered), "hueco en el paso {step}");
+                }
+            }
+        }
+    }
 }
