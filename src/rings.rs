@@ -13,17 +13,17 @@ use crate::shaders::noise_helpers::cell_random;
 use crate::shaders::{color, mix, smoothstep};
 
 /// Cantidad de anillos: más da un sol más cargado y un poco más lento.
-const RING_COUNT: usize = 12;
+const RING_COUNT: usize = 7;
 /// Radio con el que nace un anillo, todavía oculto dentro del sol.
 const START_RADIUS: f32 = 0.80;
 /// Radio con el que termina de apagarse.
-const END_RADIUS: f32 = 1.22;
+const END_RADIUS: f32 = 1.1;
 /// Ancho de un anillo.
-const RING_WIDTH: f32 = 0.15;
+const RING_WIDTH: f32 = 0.2;
 /// Vueltas por segundo del ciclo de nacer y apagarse.
 const EXPANSION_SPEED: f32 = 0.055;
 /// Brillo general: 0 apaga los anillos.
-const RING_BRIGHTNESS: f32 = 1.7;
+const RING_BRIGHTNESS: f32 = 2.3;
 /// Brillo de los anillos que pasan por delante del disco, para que no se vean
 /// como rayas sobre la superficie: 1 los deja igual que los de afuera.
 const OVER_SUN_BRIGHTNESS: f32 = 0.3;
@@ -113,7 +113,7 @@ impl Rings {
 /// Avance del anillo en su ciclo. Solo está activo mientras se ve.
 fn activate(ring: &Ring, time: f32) -> Option<ActiveRing<'_>> {
     let age = (time * EXPANSION_SPEED + ring.phase).fract();
-    let fade = (1.0 - smoothstep(0.55, 1.0, age)) * smoothstep(0.0, 0.08, age);
+    let fade = (1.0 - smoothstep(0.7, 1.0, age)) * smoothstep(0.0, 0.08, age);
     if fade <= 0.0 {
         return None;
     }
